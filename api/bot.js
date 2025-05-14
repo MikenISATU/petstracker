@@ -11,7 +11,7 @@ app.use(express.json());
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
 const INFURA_BSC_URL = process.env.INFURA_BSC_URL || 'https://bsc-dataseed.binance.org/';
 const INFURA_ETH_URL = process.env.INFURA_ETH_URL || 'https://mainnet.infura.io/v3/b9998be18b6941e9bc6ebbb4f1b5dfa3';
-const VERCEL_URL = process.env.VERCEL_URL || 'https://petstokenbuy-eid20nn7i-miles-kenneth-napilan-isatus-projects.vercel.app/';
+const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-niqtjv2x6-miles-kenneth-napilan-isatus-projects.vercel.app/';
 
 // Validate environment variables
 if (!TELEGRAM_BOT_TOKEN || !INFURA_BSC_URL || !INFURA_ETH_URL || !VERCEL_URL) {
@@ -128,8 +128,12 @@ app.post('/api/bot', (req, res) => {
   }
 });
 
-// Telegram commands
+// Telegram commands with safety checks
 bot.onText(/\/start/, (msg) => {
+  if (!msg || !msg.chat || !msg.chat.id) {
+    console.error('Invalid message object in /start:', msg);
+    return;
+  }
   const chatId = msg.chat.id;
   console.log(`Processing /start for chat ${chatId}`);
   activeChats.add(chatId);
@@ -138,6 +142,10 @@ bot.onText(/\/start/, (msg) => {
 });
 
 bot.onText(/\/track/, (msg) => {
+  if (!msg || !msg.chat || !msg.chat.id) {
+    console.error('Invalid message object in /track:', msg);
+    return;
+  }
   const chatId = msg.chat.id;
   console.log(`Processing /track for chat ${chatId}`);
   if (!activeChats.has(chatId)) activeChats.add(chatId);
@@ -151,6 +159,10 @@ bot.onText(/\/track/, (msg) => {
 });
 
 bot.onText(/\/stop/, (msg) => {
+  if (!msg || !msg.chat || !msg.chat.id) {
+    console.error('Invalid message object in /stop:', msg);
+    return;
+  }
   const chatId = msg.chat.id;
   console.log(`Processing /stop for chat ${chatId}`);
   activeChats.delete(chatId);
@@ -164,6 +176,10 @@ bot.onText(/\/stop/, (msg) => {
 });
 
 bot.onText(/\/stats/, async (msg) => {
+  if (!msg || !msg.chat || !msg.chat.id) {
+    console.error('Invalid message object in /stats:', msg);
+    return;
+  }
   const chatId = msg.chat.id;
   console.log(`Processing /stats for chat ${chatId}`);
   let bscMessage = 'BSC: No transactions recorded yet.';
@@ -215,6 +231,10 @@ bot.onText(/\/stats/, async (msg) => {
 });
 
 bot.onText(/\/help/, (msg) => {
+  if (!msg || !msg.chat || !msg.chat.id) {
+    console.error('Invalid message object in /help:', msg);
+    return;
+  }
   const chatId = msg.chat.id;
   console.log(`Processing /help for chat ${chatId}`);
   bot.sendMessage(chatId, 'Available commands:\n/start - Start the bot\n/track - Enable buy alerts\n/stop - Disable buy alerts\n/stats - View latest $PETS tx on BSC & ETH\n/status - Check tracking status\n/help - Show this message')
@@ -222,6 +242,10 @@ bot.onText(/\/help/, (msg) => {
 });
 
 bot.onText(/\/status/, (msg) => {
+  if (!msg || !msg.chat || !msg.chat.id) {
+    console.error('Invalid message object in /status:', msg);
+    return;
+  }
   const chatId = msg.chat.id;
   console.log(`Processing /status for chat ${chatId}`);
   const isTracking = activeChats.has(chatId);
