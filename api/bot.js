@@ -2,6 +2,8 @@ import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import Web3 from 'web3';
 
+console.log('Web3 import:', Web3);
+
 const app = express();
 app.use(express.json());
 
@@ -23,9 +25,23 @@ const PETS_ETH_ADDRESS = '0x98b794be9c4f49900c6193aaff20876e1f36043e';
 const PANCAKESWAP_ROUTER = '0x10ED43C718714eb63d5aA57B78B54704E256024E';
 const UNISWAP_ROUTER = '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D';
 
-// Initialize Web3 providers
-const bscWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_BSC_URL));
-const ethWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_ETH_URL));
+// Initialize Web3 providers with timeout
+let bscWeb3, ethWeb3;
+try {
+  bscWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_BSC_URL, { timeout: 5000 }));
+  console.log('bscWeb3 initialized:', !!bscWeb3);
+} catch (err) {
+  console.error('Failed to initialize bscWeb3:', err);
+  process.exit(1);
+}
+
+try {
+  ethWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_ETH_URL, { timeout: 5000 }));
+  console.log('ethWeb3 initialized:', !!ethWeb3);
+} catch (err) {
+  console.error('Failed to initialize ethWeb3:', err);
+  process.exit(1);
+}
 
 // ERC-20 Transfer ABI
 const ERC20_ABI = [{
@@ -40,8 +56,22 @@ const ERC20_ABI = [{
 }];
 
 // Initialize contracts
-const bscContract = new bscWeb3.eth.Contract(ERC20_ABI, PETS_BSC_ADDRESS);
-const ethContract = new ethWeb3.eth.Contract(ERC20_ABI, PETS_ETH_ADDRESS);
+let bscContract, ethContract;
+try {
+  bscContract = new bscWeb3.eth.Contract(ERC20_ABI, PETS_BSC_ADDRESS);
+  console.log('bscContract initialized:', !!bscContract);
+} catch (err) {
+  console.error('Failed to initialize bscContract:', err);
+  process.exit(1);
+}
+
+try {
+  ethContract = new ethWeb3.eth.Contract(ERC20_ABI, PETS_ETH_ADDRESS);
+  console.log('ethContract initialized:', !!ethContract);
+} catch (err) {
+  console.error('Failed to initialize ethContract:', err);
+  process.exit(1);
+}
 
 // In-memory data
 let transactions = [];
@@ -51,6 +81,7 @@ let lastEthBlock = 0;
 
 // Categorize buy amounts
 const categorizeBuy = (amount, web3) => {
+  if (!web3) return 'Unknown Buy';
   const tokens = web3.utils.fromWei(amount, 'ether');
   if (tokens < 1000) return 'MicroPets Buy';
   if (tokens < 10000) return 'Medium Bullish Buy';
@@ -68,9 +99,10 @@ const categoryVideos = {
 const isDexTrade = async (txHash, chain) => {
   const web3 = chain === 'BSC' ? bscWeb3 : ethWeb3;
   const router = chain === 'BSC' ? PANCAKESWAP_ROUTER : UNISWAP_ROUTER;
+  if (!web3) return false;
   try {
     const tx = await web3.eth.getTransaction(txHash);
-    return tx?.to?.toLowerCase() === router.toLowerCase();
+    return tx && tx.to?.toLowerCase() === router.toLowerCase();
   } catch (err) {
     console.error(`[DEX Check Error] Chain: ${chain}, TxHash: ${txHash}, Error:`, err.message);
     return false;
@@ -78,12 +110,13 @@ const isDexTrade = async (txHash, chain) => {
 };
 
 // Initialize Telegram Bot with webhook
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN);
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
 console.log(`Set webhook: curl -X GET "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${VERCEL_URL}/api/bot"`);
 
 // Telegram webhook route
 app.post('/api/bot', (req, res) => {
   try {
+    console.log('Received Telegram update:', JSON.stringify(req.body));
     bot.processUpdate(req.body);
     res.sendStatus(200);
   } catch (err) {
@@ -95,24 +128,31 @@ app.post('/api/bot', (req, res) => {
 // Telegram commands
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
+  console.log(`Processing /start for chat ${chatId}`);
   activeChats.add(chatId);
-  bot.sendMessage(chatId, 'Welcome to PETS Tracker! Use /track to start receiving buy alerts.');
+  bot.sendMessage(chatId, 'Welcome to PETS Tracker! Use /track to start receiving buy alerts.')
+    .catch(err => console.error(`Failed to send /start message to ${chatId}:`, err.message));
 });
 
 bot.onText(/\/track/, (msg) => {
   const chatId = msg.chat.id;
+  console.log(`Processing /track for chat ${chatId}`);
   activeChats.add(chatId);
-  bot.sendMessage(chatId, 'Started tracking PETS buys.');
+  bot.sendMessage(chatId, 'Started tracking PETS buys. You’ll get notified on new buys.')
+    .catch(err => console.error(`Failed to send /track message to ${chatId}:`, err.message));
 });
 
 bot.onText(/\/stop/, (msg) => {
   const chatId = msg.chat.id;
+  console.log(`Processing /stop for chat ${chatId}`);
   activeChats.delete(chatId);
-  bot.sendMessage(chatId, 'Stopped tracking PETS buys.');
+  bot.sendMessage(chatId, 'Stopped tracking PETS buys.')
+    .catch(err => console.error(`Failed to send /stop message to ${chatId}:`, err.message));
 });
 
 bot.onText(/\/stats/, async (msg) => {
   const chatId = msg.chat.id;
+  console.log(`Processing /stats for chat ${chatId}`);
   let bscMessage = 'BSC: No transactions recorded yet.';
   let ethMessage = 'Ethereum: No transactions recorded yet.';
 
@@ -163,13 +203,17 @@ bot.onText(/\/stats/, async (msg) => {
 
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
-  bot.sendMessage(chatId, 'Commands:\n/start - Start bot\n/track - Enable alerts\n/stop - Disable alerts\n/stats - Last $PETS tx on BSC & ETH\n/status - Tracking status\n/help - This message');
+  console.log(`Processing /help for chat ${chatId}`);
+  bot.sendMessage(chatId, 'Available commands:\n/start - Start the bot\n/track - Enable buy alerts\n/stop - Disable buy alerts\n/stats - View latest $PETS tx on BSC & ETH\n/status - Check tracking status\n/help - Show this message')
+    .catch(err => console.error(`Failed to send /help message to ${chatId}:`, err.message));
 });
 
 bot.onText(/\/status/, (msg) => {
   const chatId = msg.chat.id;
+  console.log(`Processing /status for chat ${chatId}`);
   const isTracking = activeChats.has(chatId);
-  bot.sendMessage(chatId, `Status: ${isTracking ? 'Tracking' : 'Not tracking'}\nTotal transactions: ${transactions.length}`);
+  bot.sendMessage(chatId, `Status: ${isTracking ? 'Tracking enabled' : 'Tracking disabled'}\nTotal tracked transactions: ${transactions.length}`)
+    .catch(err => console.error(`Failed to send /status message to ${chatId}:`, err.message));
 });
 
 // Polling function
@@ -186,7 +230,10 @@ const monitorTransactions = async () => {
       const fromBlock = lastBlock;
       const toBlock = latestBlock > fromBlock + BigInt(maxBlocksPerPoll) ? fromBlock + BigInt(maxBlocksPerPoll) : latestBlock;
 
-      if (fromBlock >= toBlock) return lastBlock;
+      if (fromBlock >= toBlock) {
+        console.log(`No new blocks to poll on ${chain}.`);
+        return lastBlock;
+      }
 
       const events = await contract.getPastEvents('Transfer', {
         fromBlock: Number(fromBlock),
@@ -205,7 +252,7 @@ const monitorTransactions = async () => {
           to,
           amount: web3.utils.fromWei(value, 'ether'),
           category,
-          video: categoryVideos[category],
+          video: categoryVideos[category] || '/videos/default.mp4',
           timestamp: Date.now(),
           isPairTrade,
           transactionHash
