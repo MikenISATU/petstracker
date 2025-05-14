@@ -82,9 +82,9 @@ let lastBscBlock = 0;
 let lastEthBlock = 0;
 
 // Categorize buy amounts
-const categorizeBuy = (amount) => {
-  if (!bscWeb3) return 'Unknown Buy';
-  const tokens = bscWeb3.utils.fromWei(amount, 'ether');
+const categorizeBuy = (amount, web3) => {
+  if (!web3) return 'Unknown Buy';
+  const tokens = web3.utils.fromWei(amount, 'ether');
   if (tokens < 1000) return 'MicroPets Buy';
   if (tokens < 10000) return 'Medium Bullish Buy';
   return 'Whale Buy';
@@ -163,10 +163,11 @@ bot.onText(/\/stats/, async (msg) => {
   let bscMessage = 'BSC: No transactions recorded yet.';
   let ethMessage = 'Ethereum: No transactions recorded yet.';
 
+  // BSC latest transaction (BNB pair)
   try {
     const latestBscBlock = await bscWeb3.eth.getBlockNumber();
     const events = await bscContract.getPastEvents('Transfer', {
-      fromBlock: Number(BigInt(latestBscBlock) - 1n),
+      fromBlock: 0, // Start from genesis block to capture all history
       toBlock: Number(latestBscBlock)
     });
     const lastEvent = events.sort((a, b) => Number(b.blockNumber - a.blockNumber))[0];
@@ -175,17 +176,20 @@ bot.onText(/\/stats/, async (msg) => {
       const { to, value } = returnValues;
       const isPairTrade = await isDexTrade(transactionHash, 'BSC');
       const category = categorizeBuy(value, bscWeb3);
-      bscMessage = `BSC Latest Transaction:\nCategory: ${category}\nAmount: ${bscWeb3.utils.fromWei(value, 'ether')} PETS\nTo: ${to}\nPair Trade: ${isPairTrade ? 'Yes' : 'No'}\nVideo: ${VERCEL_URL}${categoryVideos[category]}`;
+      const video = categoryVideos[category] || '/videos/default.mp4';
+      const bscScanUrl = `https://bscscan.com/tx/${transactionHash}`;
+      bscMessage = `BSC Latest Transaction (BNB Pair):\nCategory: ${category}\nAmount: ${bscWeb3.utils.fromWei(value, 'ether')} PETS\nTo: ${to}\nPair Trade: ${isPairTrade ? 'Yes' : 'No'}\nVideo: ${VERCEL_URL}${video}\n\nStaking: https://pets.micropets.io/petdex\nChart: https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01\nMerch: https://micropets.store/\nBuy $PETS: https://pancakeswap.finance/swap?outputCurrency=0x4bdece4e422fa015336234e4fc4d39ae6dd75b01\nView on BscScan: ${bscScanUrl}`;
     }
   } catch (err) {
     console.error(`Error fetching BSC stats:`, err.message);
     bscMessage = 'BSC: Error fetching latest transaction.';
   }
 
+  // Ethereum latest transaction (ETH pair)
   try {
     const latestEthBlock = await ethWeb3.eth.getBlockNumber();
     const events = await ethContract.getPastEvents('Transfer', {
-      fromBlock: Number(BigInt(latestEthBlock) - 1n),
+      fromBlock: 0, // Start from genesis block to capture all history
       toBlock: Number(latestEthBlock)
     });
     const lastEvent = events.sort((a, b) => Number(b.blockNumber - a.blockNumber))[0];
@@ -194,7 +198,9 @@ bot.onText(/\/stats/, async (msg) => {
       const { to, value } = returnValues;
       const isPairTrade = await isDexTrade(transactionHash, 'Ethereum');
       const category = categorizeBuy(value, ethWeb3);
-      ethMessage = `Ethereum Latest Transaction:\nCategory: ${category}\nAmount: ${ethWeb3.utils.fromWei(value, 'ether')} PETS\nTo: ${to}\nPair Trade: ${isPairTrade ? 'Yes' : 'No'}\nVideo: ${VERCEL_URL}${categoryVideos[category]}`;
+      const video = categoryVideos[category] || '/videos/default.mp4';
+      const etherscanUrl = `https://etherscan.io/tx/${transactionHash}`;
+      ethMessage = `Ethereum Latest Transaction (ETH Pair):\nCategory: ${category}\nAmount: ${ethWeb3.utils.fromWei(value, 'ether')} PETS\nTo: ${to}\nPair Trade: ${isPairTrade ? 'Yes' : 'No'}\nVideo: ${VERCEL_URL}${video}\n\nStaking: https://pets.micropets.io/petdex\nChart: https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329\nMerch: https://micropets.store/\nBuy $PETS: https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=0x98b794be9c4f49900c6193aaff20876e1f36043e\nView on Etherscan: ${etherscanUrl}`;
     }
   } catch (err) {
     console.error(`Error fetching Ethereum stats:`, err.message);
@@ -209,7 +215,7 @@ bot.onText(/\/stats/, async (msg) => {
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
   console.log(`Processing /help for chat ${chatId}`);
-  bot.sendMessage(chatId, 'Available commands:\n/start - Start the bot\n/track - Enable buy alerts\n/stop - Disable buy alerts\n/stats - View last 5 transaction stats\n/status - Check tracking status\n/help - Show this message')
+  bot.sendMessage(chatId, 'Available commands:\n/start - Start the bot\n/track - Enable buy alerts\n/stop - Disable buy alerts\n/stats - View latest buy from BSC and Ethereum\n/status - Check tracking status\n/help - Show this message')
     .catch(err => console.error(`Failed to send /help message to ${chatId}:`, err));
 });
 
@@ -269,7 +275,7 @@ const monitorTransactions = async () => {
           for (const chatId of activeChats) {
             try {
               await bot.sendVideo(chatId, `${VERCEL_URL}${tx.video}`, {
-                caption: `🚀 New ${category} on BSC${isPairTrade ? ' (Pair Trade)' : ''}!\nTo: ${to}\nAmount: ${tx.amount} PETS`
+                caption: `🚀 New ${category} on BSC${isPairTrade ? ' (Pair Trade)' : ''}!\nTo: ${to}\nAmount: ${tx.amount} PETS\n\nStaking: https://pets.micropets.io/petdex\nChart: https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01\nMerch: https://micropets.store/\nBuy $PETS: https://pancakeswap.finance/swap?outputCurrency=0x4bdece4e422fa015336234e4fc4d39ae6dd75b01\nView on BscScan: https://bscscan.com/tx/${transactionHash}`
               });
             } catch (err) {
               console.error(`Failed to send video to chat ${chatId}:`, err);
@@ -332,7 +338,7 @@ const monitorTransactions = async () => {
           for (const chatId of activeChats) {
             try {
               await bot.sendVideo(chatId, `${VERCEL_URL}${tx.video}`, {
-                caption: `🚀 New ${category} on Ethereum${isPairTrade ? ' (Pair Trade)' : ''}!\nTo: ${to}\nAmount: ${tx.amount} PETS`
+                caption: `🚀 New ${category} on Ethereum${isPairTrade ? ' (Pair Trade)' : ''}!\nTo: ${to}\nAmount: ${tx.amount} PETS\n\nStaking: https://pets.micropets.io/petdex\nChart: https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329\nMerch: https://micropets.store/\nBuy $PETS: https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=0x98b794be9c4f49900c6193aaff20876e1f36043e\nView on Etherscan: https://etherscan.io/tx/${transactionHash}`
               });
             } catch (err) {
               console.error(`Failed to send video to chat ${chatId}:`, err);
