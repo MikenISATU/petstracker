@@ -1,6 +1,8 @@
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import Web3 from 'web3';
+import pRetry from 'p-retry'; // Add p-retry for retries
+import { Agent } from 'undici'; // Add undici for HTTP keep-alive
 
 console.log('Web3 import:', Web3); // Debug log to verify import
 
@@ -27,10 +29,19 @@ const PETS_ETH_ADDRESS = '0x98b794be9c4f49900c6193aaff20876e1f36043e';
 const PANCAKESWAP_ROUTER = '0x10ED43C718714eb63d5aA57B78B54704E256024E';
 const UNISWAP_ROUTER = '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D';
 
+// Configure HTTP keep-alive agent
+const httpAgent = new Agent({
+  keepAliveTimeout: 30000, // 30s timeout
+  keepAliveMaxTimeout: 60000, // Max 60s
+});
+
 // Initialize Web3 providers with HttpProvider
 let bscWeb3, ethWeb3;
 try {
-  bscWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_BSC_URL));
+  bscWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_BSC_URL, {
+    agent: { http: httpAgent },
+    timeout: 30000,
+  }));
   console.log('bscWeb3 initialized:', !!bscWeb3);
 } catch (err) {
   console.error('Failed to initialize bscWeb3:', err);
@@ -38,7 +49,10 @@ try {
 }
 
 try {
-  ethWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_ETH_URL));
+  ethWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_ETH_URL, {
+    agent: { http: httpAgent },
+    timeout: 30000,
+  }));
   console.log('ethWeb3 initialized:', !!ethWeb3);
 } catch (err) {
   console.error('Failed to initialize ethWeb3:', err);
@@ -234,6 +248,8 @@ bot.onText(/\/stats/, async (msg) => {
     .catch(err => console.error(`Failed to send /stats message to ${chatId}:`, err));
 });
 
+
+
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
   console.log(`Processing /help for chat ${chatId}`);
@@ -249,11 +265,32 @@ bot.onText(/\/status/, (msg) => {
     .catch(err => console.error(`Failed to send /status message to ${chatId}:`, err));
 });
 
-// Polling function with rate limit handling
+// Polling function with enhanced error handling
 const monitorTransactions = async () => {
-  const pollInterval = 60 * 1000; // Poll every 60 seconds
-  const maxBlocksPerPoll = 10; // Limit to 10 blocks per poll
-  let retryDelay = 5000; // Initial retry delay for rate limits
+  const pollInterval = 90 * 1000; // Poll every 90 seconds to reduce rate limit hits
+  const maxBlocksPerPoll = 3; // Reduced to 3 blocks per poll to minimize load
+
+  const pollWithRetry = async (fn, chain) => {
+    return pRetry(
+      async () => {
+        try {
+          await fn();
+        } catch (err) {
+          console.error(`[${chain}] Polling error:`, err.message);
+          throw err; // Let p-retry handle the retry logic
+        }
+      },
+      {
+        retries: 5,
+        minTimeout: 5000,
+        maxTimeout: 60000,
+        factor: 2,
+        onFailedAttempt: (error) => {
+          console.log(`[${chain}] Retry attempt ${error.attemptNumber} failed: ${error.message}`);
+        },
+      }
+    );
+  };
 
   const pollBsc = async () => {
     try {
@@ -312,14 +349,8 @@ const monitorTransactions = async () => {
       }
 
       lastBscBlock = toBlock + BigInt(1);
-      retryDelay = 5000; // Reset retry delay on success
     } catch (err) {
-      console.error('Error polling BSC Transfer events:', err.message);
-      if (err.message.includes('limit exceeded')) {
-        console.log(`Rate limit hit. Retrying in ${retryDelay / 1000} seconds.`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
-        retryDelay = Math.min(retryDelay * 2, 60000); // Exponential backoff, max 60s
-      }
+      throw new Error(`BSC polling failed: ${err.message}`);
     }
   };
 
@@ -380,24 +411,18 @@ const monitorTransactions = async () => {
       }
 
       lastEthBlock = toBlock + BigInt(1);
-      retryDelay = 5000; // Reset retry delay on success
     } catch (err) {
-      console.error('Error polling Ethereum Transfer events:', err.message);
-      if (err.message.includes('limit exceeded')) {
-        console.log(`Rate limit hit. Retrying in ${retryDelay / 1000} seconds.`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
-        retryDelay = Math.min(retryDelay * 2, 60000); // Exponential backoff, max 60s
-      }
+      throw new Error(`Ethereum polling failed: ${err.message}`);
     }
   };
 
   // Run polling loops
-  setInterval(pollBsc, pollInterval);
-  setInterval(pollEth, pollInterval);
+  setInterval(() => pollWithRetry(pollBsc, 'BSC').catch(err => console.error('BSC polling interval error:', err)), pollInterval);
+  setInterval(() => pollWithRetry(pollEth, 'Ethereum').catch(err => console.error('Ethereum polling interval error:', err)), pollInterval);
 
   // Run immediately on start
-  await pollBsc();
-  await pollEth();
+  await pollWithRetry(pollBsc, 'BSC').catch(err => console.error('Initial BSC poll failed:', err));
+  await pollWithRetry(pollEth, 'Ethereum').catch(err => console.error('Initial Ethereum poll failed:', err));
 };
 
 // Start monitoring
