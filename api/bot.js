@@ -12,7 +12,7 @@ app.use(express.json());
 // Load environment variables safely
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
 const INFURA_BSC_URL = process.env.INFURA_BSC_URL || 'https://bsc.nownodes.io/97a8bb57-9985-48b3-ad57-8054752cfcb5';
-const INFURA_ETH_URL = process.env.INFURA_ETH_URL || 'https://mainnet.infura.io/v3/b9998be18b6941e9bc6ebbb4f1b5dfa3';
+const INFURA_ETH_URL = process.env.INFURA_ETH_URL || 'https://rpc.ankr.com/eth';
 const VERCEL_URL = process.env.VERCEL_URL || 'https://petstokenbuy-eid20nn7i-miles-kenneth-napilan-isatus-projects.vercel.app/';
 
 // Fallback providers
@@ -179,10 +179,20 @@ bot.onText(/\/start/, (msg) => {
     .catch(err => console.error(`Failed to send /start message to ${chatId}:`, err));
 });
 
-bot.onText(/\/track/, (msg) => {
+bot.onText(/\/track/, async (msg) => {
   const chatId = msg.chat.id;
   console.log(`Processing /track for chat ${chatId}`);
   activeChats.add(chatId);
+
+  // Initialize block numbers for new chats to ensure latest buys
+  try {
+    lastBscBlock = Number(await bscWeb3.eth.getBlockNumber());
+    lastEthBlock = Number(await ethWeb3.eth.getBlockNumber());
+    console.log(`Initialized blocks for chat ${chatId}: BSC=${lastBscBlock}, ETH=${lastEthBlock}`);
+  } catch (err) {
+    console.error(`Failed to initialize block numbers for chat ${chatId}:`, err);
+  }
+
   bot.sendMessage(chatId, '📈 Started tracking PETS buys. You’ll get notified on new buys.')
     .catch(err => console.error(`Failed to send /track message to ${chatId}:`, err));
 });
@@ -330,7 +340,7 @@ bot.onText(/\/stats/, async (msg) => {
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
   console.log(`Processing /help for chat ${chatId}`);
-  bot.sendMessage(chatId, '🆘 *Available commands:*\n/start - Start the bot\n/track - Enable buy alerts\n/stop - Disable buy alerts\n/stats - View latest buy from BSC and Ethereum\n/status - Check tracking status\n/help - Show this message\n/test - Show sample Medium Bullish Buy', { parse_mode: 'Markdown' })
+  bot.sendMessage(chatId, '🆘 *Available commands:*\n/start - Start the bot\n/track - Enable buy alerts\n/stop - Disable buy alerts\n/stats - View latest buy from BSC and Ethereum\n/status - Check tracking status\n/help - Show this message\n/test [small|medium|large] - Show sample buy (default: medium)', { parse_mode: 'Markdown' })
     .catch(err => console.error(`Failed to send /help message to ${chatId}:`, err));
 });
 
@@ -342,47 +352,54 @@ bot.onText(/\/status/, (msg) => {
     .catch(err => console.error(`Failed to send /status message to ${chatId}:`, err));
 });
 
-bot.onText(/\/test/, async (msg) => {
+bot.onText(/\/test(?:\s+(small|medium|large))?/, async (msg, match) => {
   const chatId = msg.chat?.id;
   if (!chatId) {
     console.error('Invalid message object in /test:', msg);
     return;
   }
   console.log(`Processing /test for chat ${chatId}`);
+  const buyType = match[1] || 'medium'; // Default to medium
+  const buyCategory = {
+    small: 'MicroPets Buy',
+    medium: 'Medium Bullish Buy',
+    large: 'Whale Buy'
+  }[buyType];
+  const tokens = {
+    small: '500', // < 1000 PETS
+    medium: '5000', // 1000–10000 PETS
+    large: '15000' // > 10000 PETS
+  }[buyType];
 
-  // Sample Medium Bullish Buy for BSC
+  // Sample buy for BSC
   const bscSample = {
     chain: 'BSC',
     to: '0x1234567890abcdef1234567890abcdef12345678',
-    value: bscWeb3.utils.toWei('5000', 'ether'), // 5000 PETS for Medium Bullish Buy
-    transactionHash: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
+    value: bscWeb3.utils.toWei(tokens, 'ether')
   };
-  const bscCategory = categorizeBuy(bscSample.value, bscWeb3);
-  const bscVideo = categoryVideos[bscCategory] || '/videos/default.mp4';
+  const bscVideo = categoryVideos[buyCategory] || '/videos/default.mp4';
   const bscUsdtValue = getUSDTValue(bscSample.value, 'BSC');
   const bscMarketCap = getMarketCap();
   const bscTokens = bscWeb3.utils.fromWei(bscSample.value, 'ether');
-  const bscScanUrl = `https://bscscan.com/tx/${bscSample.transactionHash}`;
-  const bscMessage = `@MicroPets Buy Bot\nMicroPets Buy - BNBchain\nBNB Value: $${bscUsdtValue}\nMarket Cap: ${bscMarketCap}\nHoldings: ${bscTokens} $PETS\nHolder Address: ${bscSample.to}\nBSCScan: [${bscSample.transactionHash}](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)`;
+  const bscScanUrl = 'https://example.com/bsc-tx';
+  const bscMessage = `@MicroPets Buy Bot\nMicroPets Buy - BNBchain\nBNB Value: $${bscUsdtValue}\nMarket Cap: ${bscMarketCap}\nHoldings: ${bscTokens} $PETS\nHolder Address: ${bscSample.to}\nBSCScan: [View Transaction](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)`;
   await bot.sendVideo(chatId, `${VERCEL_URL}${bscVideo}`, {
     caption: bscMessage,
     parse_mode: 'Markdown'
   }).catch(err => console.error(`Failed to send BSC test video to ${chatId}:`, err));
 
-  // Sample Medium Bullish Buy for Ethereum
+  // Sample buy for Ethereum
   const ethSample = {
     chain: 'Ethereum',
     to: '0xabcdef1234567890abcdef1234567890abcdef12',
-    value: ethWeb3.utils.toWei('5000', 'ether'), // 5000 PETS for Medium Bullish Buy
-    transactionHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+    value: ethWeb3.utils.toWei(tokens, 'ether')
   };
-  const ethCategory = categorizeBuy(ethSample.value, ethWeb3);
-  const ethVideo = categoryVideos[ethCategory] || '/videos/default.mp4';
+  const ethVideo = categoryVideos[buyCategory] || '/videos/default.mp4';
   const ethUsdtValue = getUSDTValue(ethSample.value, 'Ethereum');
   const ethMarketCap = getMarketCap();
   const ethTokens = ethWeb3.utils.fromWei(ethSample.value, 'ether');
-  const etherscanUrl = `https://etherscan.io/tx/${ethSample.transactionHash}`;
-  const ethMessage = `@MicroPets Buy Bot\nMicroPets Buy - Ethereum\nETH Value: $${ethUsdtValue}\nMarket Cap: ${ethMarketCap}\nHoldings: ${ethTokens} $PETS\nHolder Address: ${ethSample.to}\nEtherscan: [${ethSample.transactionHash}](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=0x98b794be9c4f49900c6193aaff20876e1f36043e)`;
+  const etherscanUrl = 'https://example.com/eth-tx';
+  const ethMessage = `@MicroPets Buy Bot\nMicroPets Buy - Ethereum\nETH Value: $${ethUsdtValue}\nMarket Cap: ${ethMarketCap}\nHoldings: ${ethTokens} $PETS\nHolder Address: ${ethSample.to}\nEtherscan: [View Transaction](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=0x98b794be9c4f49900c6193aaff20876e1f36043e)`;
   await bot.sendVideo(chatId, `${VERCEL_URL}${ethVideo}`, {
     caption: ethMessage,
     parse_mode: 'Markdown'
@@ -438,6 +455,7 @@ const monitorTransactions = async () => {
         const { returnValues, transactionHash } = event;
         const { to, value } = returnValues;
         const isPairTrade = await isDexTrade(transactionHash, 'BSC');
+        if (!isPairTrade) continue; // Only process DEX buys
         const category = categorizeBuy(value, bscWeb3);
         const video = categoryVideos[category] || '/videos/default.mp4';
         const usdtValue = getUSDTValue(value, 'BSC');
@@ -502,6 +520,7 @@ const monitorTransactions = async () => {
         const { returnValues, transactionHash } = event;
         const { to, value } = returnValues;
         const isPairTrade = await isDexTrade(transactionHash, 'Ethereum');
+        if (!isPairTrade) continue; // Only process DEX buys
         const category = categorizeBuy(value, ethWeb3);
         const video = categoryVideos[category] || '/videos/default.mp4';
         const usdtValue = getUSDTValue(value, 'Ethereum');
