@@ -10,7 +10,7 @@ app.use(express.json());
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
 const INFURA_BSC_URL = process.env.INFURA_BSC_URL || 'https://bsc-dataseed.binance.org/';
 const INFURA_ETH_URL = process.env.INFURA_ETH_URL || 'https://mainnet.infura.io/v3/b9998be18b6941e9bc6ebbb4f1b5dfa3';
-const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-7fbrsnu3b-miles-kenneth-napilan-isatus-projects.vercel.app';
+const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-ieefindlr-miles-kenneth-napilan-isatus-projects.vercel.app/';
 
 // Validate environment variables
 if (!TELEGRAM_BOT_TOKEN || !INFURA_BSC_URL || !INFURA_ETH_URL || !VERCEL_URL) {
