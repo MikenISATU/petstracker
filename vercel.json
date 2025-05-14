@@ -1,14 +1,13 @@
 {
   "version": 2,
   "builds": [
-    { "src": "api/bot.js", "use": "@vercel/node" },
-    { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "build" } }
+    { "src": "api/bot.js", "use": "@vercel/node" }
   ],
   "routes": [
-    { "src": "/api/bot/(.*)", "dest": "/api/bot.js", "methods": ["POST"] },
-    { "src": "/api/(.*)", "dest": "/api/bot.js" },
+    { "src": "/api/bot", "dest": "/api/bot.js", "methods": ["POST"] },
+    { "src": "/api/transactions", "dest": "/api/bot.js" },
     { "src": "/videos/(.*)", "dest": "/public/videos/$1" },
-    { "src": "/(.*)", "dest": "/build/$1" }
+    { "src": "/(.*)", "dest": "/index.html" }
   ],
   "env": {
     "NODE_ENV": "production",
