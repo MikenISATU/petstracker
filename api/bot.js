@@ -11,7 +11,6 @@ const INFURA_BSC_URL = process.env.INFURA_BSC_URL || 'https://bsc-dataseed.binan
 const INFURA_ETH_URL = process.env.INFURA_ETH_URL || 'https://mainnet.infura.io/v3/b9998be18b6941e9bc6ebbb4f1b5dfa3';
 const VERCEL_URL = process.env.VERCEL_URL || 'https://petstokenbuy-eid20nn7i-miles-kenneth-napilan-isatus-projects.vercel.app/';
 
-
 // Validate environment variables
 if (!TELEGRAM_BOT_TOKEN || !INFURA_BSC_URL || !INFURA_ETH_URL || !VERCEL_URL) {
   console.error('Missing critical environment variables.');
@@ -51,8 +50,8 @@ let lastBscBlock = 0;
 let lastEthBlock = 0;
 
 // Categorize buy amounts
-const categorizeBuy = (amount) => {
-  const tokens = bscWeb3.utils.fromWei(amount, 'ether');
+const categorizeBuy = (amount, web3) => {
+  const tokens = web3.utils.fromWei(amount, 'ether');
   if (tokens < 1000) return 'MicroPets Buy';
   if (tokens < 10000) return 'Medium Bullish Buy';
   return 'Whale Buy';
@@ -112,24 +111,51 @@ bot.onText(/\/stop/, (msg) => {
   bot.sendMessage(chatId, 'Stopped tracking PETS buys.');
 });
 
-bot.onText(/\/stats/, (msg) => {
+bot.onText(/\/stats/, async (msg) => {
   const chatId = msg.chat.id;
-  // Get the last transaction for BSC and Ethereum
-  const lastBscTx = transactions
-    .filter(tx => tx.chain === 'BSC')
-    .sort((a, b) => b.timestamp - a.timestamp)[0];
-  const lastEthTx = transactions
-    .filter(tx => tx.chain === 'Ethereum')
-    .sort((a, b) => b.timestamp - a.timestamp)[0];
+  let bscMessage = 'BSC: No transactions recorded yet.';
+  let ethMessage = 'Ethereum: No transactions recorded yet.';
 
-  // Format the message
-  const bscMessage = lastBscTx
-    ? `BSC Last Transaction:\nCategory: ${lastBscTx.category}\nAmount: ${lastBscTx.amount} PETS\nTo: ${lastBscTx.to}\nPair Trade: ${lastBscTx.isPairTrade ? 'Yes' : 'No'}`
-    : 'BSC: No transactions recorded yet.';
-  const ethMessage = lastEthTx
-    ? `Ethereum Last Transaction:\nCategory: ${lastEthTx.category}\nAmount: ${lastEthTx.amount} PETS\nTo: ${lastEthTx.to}\nPair Trade: ${lastEthTx.isPairTrade ? 'Yes' : 'No'}`
-    : 'Ethereum: No transactions recorded yet.';
-  
+  // Fetch latest BSC transaction
+  try {
+    const latestBscBlock = await bscWeb3.eth.getBlockNumber();
+    const events = await bscContract.getPastEvents('Transfer', {
+      fromBlock: Number(latestBscBlock) - 1,
+      toBlock: Number(latestBscBlock)
+    });
+    const lastEvent = events.sort((a, b) => b.blockNumber - a.blockNumber)[0];
+    if (lastEvent) {
+      const { returnValues, transactionHash } = lastEvent;
+      const { to, value } = returnValues;
+      const isPairTrade = await isDexTrade(transactionHash, 'BSC');
+      const category = categorizeBuy(value, bscWeb3);
+      bscMessage = `BSC Last Transaction:\nCategory: ${category}\nAmount: ${bscWeb3.utils.fromWei(value, 'ether')} PETS\nTo: ${to}\nPair Trade: ${isPairTrade ? 'Yes' : 'No'}`;
+    }
+  } catch (err) {
+    console.error(`Error fetching BSC stats:`, err.message);
+    bscMessage = 'BSC: Error fetching latest transaction.';
+  }
+
+  // Fetch latest Ethereum transaction
+  try {
+    const latestEthBlock = await ethWeb3.eth.getBlockNumber();
+    const events = await ethContract.getPastEvents('Transfer', {
+      fromBlock: Number(latestEthBlock) - 1,
+      toBlock: Number(latestEthBlock)
+    });
+    const lastEvent = events.sort((a, b) => b.blockNumber - a.blockNumber)[0];
+    if (lastEvent) {
+      const { returnValues, transactionHash } = lastEvent;
+      const { to, value } = returnValues;
+      const isPairTrade = await isDexTrade(transactionHash, 'Ethereum');
+      const category = categorizeBuy(value, ethWeb3);
+      ethMessage = `Ethereum Last Transaction:\nCategory: ${category}\nAmount: ${ethWeb3.utils.fromWei(value, 'ether')} PETS\nTo: ${to}\nPair Trade: ${isPairTrade ? 'Yes' : 'No'}`;
+    }
+  } catch (err) {
+    console.error(`Error fetching Ethereum stats:`, err.message);
+    ethMessage = 'Ethereum: Error fetching latest transaction.';
+  }
+
   const message = `Latest $PETS Transactions:\n\n${bscMessage}\n\n${ethMessage}`;
   bot.sendMessage(chatId, message)
     .catch(err => console.error(`Failed to send /stats message to ${chatId}:`, err.message));
@@ -173,7 +199,7 @@ const monitorTransactions = async () => {
         const { to, value } = returnValues;
         const isPairTrade = await isDexTrade(transactionHash, chain);
         if (!isPairTrade) continue; // Only process DEX trades
-        const category = categorizeBuy(value);
+        const category = categorizeBuy(value, web3);
         const tx = {
           chain,
           to,
@@ -221,18 +247,19 @@ const monitorTransactions = async () => {
     }
   };
 
-  // Polling loops
-  setInterval(async () => {
-    lastBscBlock = await pollChain('BSC', bscWeb3, bscContract, lastBscBlock, PANCAKESWAP_ROUTER);
-  }, pollInterval);
+  // Main polling loop
+  const pollLoop = async () => {
+    while (true) {
+      if (activeChats.size > 0) {
+        lastBscBlock = await pollChain('BSC', bscWeb3, bscContract, lastBscBlock, PANCAKESWAP_ROUTER);
+        lastEthBlock = await pollChain('Ethereum', ethWeb3, ethContract, lastEthBlock, UNISWAP_ROUTER);
+      }
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+    }
+  };
 
-  setInterval(async () => {
-    lastEthBlock = await pollChain('Ethereum', ethWeb3, ethContract, lastEthBlock, UNISWAP_ROUTER);
-  }, pollInterval);
-
-  // Initial poll
-  lastBscBlock = await pollChain('BSC', bscWeb3, bscContract, lastBscBlock, PANCAKESWAP_ROUTER);
-  lastEthBlock = await pollChain('Ethereum', ethWeb3, ethContract, lastEthBlock, UNISWAP_ROUTER);
+  // Start polling loop
+  pollLoop().catch(err => console.error('Polling loop error:', err.message));
 };
 
 // Start monitoring
