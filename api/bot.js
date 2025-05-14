@@ -10,7 +10,7 @@ app.use(express.json());
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
 const INFURA_BSC_URL = process.env.INFURA_BSC_URL || 'https://bsc-dataseed.binance.org/';
 const INFURA_ETH_URL = process.env.INFURA_ETH_URL || 'https://mainnet.infura.io/v3/b9998be18b6941e9bc6ebbb4f1b5dfa3';
-const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker.vercel.app/';
+const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-7fbrsnu3b-miles-kenneth-napilan-isatus-projects.vercel.app';
 
 // Validate environment variables
 if (!TELEGRAM_BOT_TOKEN || !INFURA_BSC_URL || !INFURA_ETH_URL || !VERCEL_URL) {
@@ -60,6 +60,8 @@ try {
 // In-memory data
 let transactions = [];
 let activeChats = new Set();
+let lastBscBlock = 0;
+let lastEthBlock = 0;
 
 // Categorize buy amounts
 const categorizeBuy = (amount) => {
@@ -90,14 +92,19 @@ const isDexTrade = async (txHash, chain) => {
   }
 };
 
-// Fetch PETS price in USD from CoinGecko
-const getPetsPrice = async () => {
-  try {
-    const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=pets&vs_currencies=usd');
-    return response.data.pets?.usd || 0.01; // Fallback price
-  } catch (err) {
-    console.error('Failed to fetch PETS price:', err.message);
-    return 0.01; // Fallback price
+// Fetch PETS price in USD from CoinGecko with retry logic
+const getPetsPrice = async (retries = 3) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=micropets&vs_currencies=usd', {
+        timeout: 5000 // 5-second timeout
+      });
+      return response.data.micropets?.usd || 0.01; // Fallback price
+    } catch (err) {
+      console.error(`Failed to fetch PETS price (attempt ${attempt}/${retries}):`, err.message);
+      if (attempt === retries) return 0.01; // Final fallback
+      await new Promise(resolve => setTimeout(resolve, 2000 * attempt)); // Exponential backoff
+    }
   }
 };
 
@@ -243,7 +250,7 @@ const fetchRecentTransactions = async () => {
   try {
     const bscBlock = await bscWeb3.eth.getBlockNumber();
     const bscEvents = await bscContract.getPastEvents('Transfer', {
-      fromBlock: Number(bscBlock) - 50, // Reduced to avoid rate limits
+      fromBlock: Number(bscBlock) - 20, // Reduced to avoid rate limits
       toBlock: Number(bscBlock)
     });
     for (const event of bscEvents.slice(-2)) {
@@ -270,7 +277,7 @@ const fetchRecentTransactions = async () => {
   try {
     const ethBlock = await ethWeb3.eth.getBlockNumber();
     const ethEvents = await ethContract.getPastEvents('Transfer', {
-      fromBlock: Number(ethBlock) - 50, // Reduced to avoid rate limits
+      fromBlock: Number(ethBlock) - 20, // Reduced to avoid rate limits
       toBlock: Number(ethBlock)
     });
     for (const event of ethEvents.slice(-2)) {
@@ -299,9 +306,7 @@ const fetchRecentTransactions = async () => {
 // Monitor transactions
 const monitorTransactions = async () => {
   const pollInterval = 30 * 1000; // Poll every 30 seconds
-  const maxBlocksPerPoll = 20;
-  let lastBscBlock = 0;
-  let lastEthBlock = 0;
+  const maxBlocksPerPoll = 10; // Reduced to avoid rate limits
 
   const pollChain = async (chain, web3, contract, lastBlock, router) => {
     try {
@@ -360,8 +365,8 @@ const monitorTransactions = async () => {
     } catch (err) {
       console.error(`Error polling ${chain} Transfer events:`, err.message);
       if (err.message.includes('limit exceeded')) {
-        console.log(`Rate limit hit on ${chain}. Retrying in 10 seconds.`);
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        console.log(`Rate limit hit on ${chain}. Retrying in 15 seconds.`);
+        await new Promise(resolve => setTimeout(resolve, 15000)); // Increased retry delay
       }
       return lastBlock;
     }
