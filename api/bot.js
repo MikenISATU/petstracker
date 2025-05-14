@@ -7,15 +7,20 @@ console.log('Web3 import:', Web3);
 const app = express();
 app.use(express.json());
 
-// Environment variables
+// Load environment variables safely
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
-const INFURA_BSC_URL = process.env.INFURA_BSC_URL || 'https://bsc-dataseed.binance.org/';
+const INFURA_BSC_URLS = [
+  'https://bsc-dataseed.binance.org/',
+  'https://bsc-dataseed1.defibit.io/',
+  'https://bsc-dataseed1.ninicoin.io/',
+  'https://bsc-dataseed2.binance.org/'
+];
 const INFURA_ETH_URL = process.env.INFURA_ETH_URL || 'https://mainnet.infura.io/v3/b9998be18b6941e9bc6ebbb4f1b5dfa3';
-const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-niqtjv2x6-miles-kenneth-napilan-isatus-projects.vercel.app/';
+const VERCEL_URL = process.env.VERCEL_URL || 'https://petstokenbuy-eid20nn7i-miles-kenneth-napilan-isatus-projects.vercel.app/';
 
 // Validate environment variables
-if (!TELEGRAM_BOT_TOKEN || !INFURA_BSC_URL || !INFURA_ETH_URL || !VERCEL_URL) {
-  console.error('Missing critical environment variables.');
+if (!TELEGRAM_BOT_TOKEN || !INFURA_ETH_URL || !VERCEL_URL) {
+  console.error('Missing critical environment variables. Please check configuration.');
   process.exit(1);
 }
 
@@ -25,25 +30,37 @@ const PETS_ETH_ADDRESS = '0x98b794be9c4f49900c6193aaff20876e1f36043e';
 const PANCAKESWAP_ROUTER = '0x10ED43C718714eb63d5aA57B78B54704E256024E';
 const UNISWAP_ROUTER = '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D';
 
-// Initialize Web3 providers with timeout
+// Initialize Web3 providers with failover for BSC
 let bscWeb3, ethWeb3;
+let currentBscProviderIndex = 0;
+
+const initializeBscWeb3 = () => {
+  try {
+    const providerUrl = INFURA_BSC_URLS[currentBscProviderIndex];
+    bscWeb3 = new Web3(new Web3.providers.HttpProvider(providerUrl));
+    console.log(`bscWeb3 initialized with ${providerUrl}:`, !!bscWeb3);
+  } catch (err) {
+    console.error(`Failed to initialize bscWeb3 with ${INFURA_BSC_URLS[currentBscProviderIndex]}:`, err);
+    process.exit(1);
+  }
+};
+
 try {
-  bscWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_BSC_URL, { timeout: 5000 }));
-  console.log('bscWeb3 initialized:', !!bscWeb3);
+  initializeBscWeb3();
 } catch (err) {
   console.error('Failed to initialize bscWeb3:', err);
   process.exit(1);
 }
 
 try {
-  ethWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_ETH_URL, { timeout: 5000 }));
+  ethWeb3 = new Web3(new Web3.providers.HttpProvider(INFURA_ETH_URL));
   console.log('ethWeb3 initialized:', !!ethWeb3);
 } catch (err) {
   console.error('Failed to initialize ethWeb3:', err);
   process.exit(1);
 }
 
-// ERC-20 Transfer ABI
+// ERC-20 Transfer ABI (for events only)
 const ERC20_ABI = [{
   anonymous: false,
   inputs: [
@@ -78,8 +95,6 @@ let transactions = [];
 let activeChats = new Set();
 let lastBscBlock = 0;
 let lastEthBlock = 0;
-let pollingActive = false;
-let pollIntervalId = null;
 
 // Categorize buy amounts
 const categorizeBuy = (amount, web3) => {
@@ -106,24 +121,24 @@ const isDexTrade = async (txHash, chain) => {
     const tx = await web3.eth.getTransaction(txHash);
     return tx && tx.to?.toLowerCase() === router.toLowerCase();
   } catch (err) {
-    console.error(`[DEX Check Error] Chain: ${chain}, TxHash: ${txHash}, Error:`, err.message);
+    console.error(`[DEX Check Error] Chain: ${chain}, TxHash: ${txHash}, Error:`, err);
     return false;
   }
 };
 
-// Initialize Telegram Bot with polling
+// Initialize Telegram Bot
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
-console.warn('Polling enabled. Set webhook for production:');
+console.warn('Polling enabled as fallback. Set webhook for production:');
 console.log(`curl -X GET "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${VERCEL_URL}/api/bot"`);
 
-// Telegram webhook route (for production)
+// Telegram webhook route
 app.post('/api/bot', (req, res) => {
   try {
     console.log('Received Telegram update:', JSON.stringify(req.body));
     bot.processUpdate(req.body);
     res.sendStatus(200);
   } catch (err) {
-    console.error('Error processing Telegram update:', err.message);
+    console.error('Error processing Telegram update:', err);
     res.sendStatus(500);
   }
 });
@@ -138,7 +153,7 @@ bot.onText(/\/start/, (msg) => {
   console.log(`Processing /start for chat ${chatId}`);
   activeChats.add(chatId);
   bot.sendMessage(chatId, 'Welcome to PETS Tracker! Use /track to start receiving buy alerts.')
-    .catch(err => console.error(`Failed to send /start message to ${chatId}:`, err.message));
+    .catch(err => console.error(`Failed to send /start message to ${chatId}:`, err));
 });
 
 bot.onText(/\/track/, (msg) => {
@@ -148,14 +163,9 @@ bot.onText(/\/track/, (msg) => {
   }
   const chatId = msg.chat.id;
   console.log(`Processing /track for chat ${chatId}`);
-  if (!activeChats.has(chatId)) activeChats.add(chatId);
-  if (!pollingActive) {
-    pollingActive = true;
-    monitorTransactions();
-    console.log('Started polling for transactions.');
-  }
+  activeChats.add(chatId);
   bot.sendMessage(chatId, 'Started tracking PETS buys. You’ll get notified on new buys.')
-    .catch(err => console.error(`Failed to send /track message to ${chatId}:`, err.message));
+    .catch(err => console.error(`Failed to send /track message to ${chatId}:`, err));
 });
 
 bot.onText(/\/stop/, (msg) => {
@@ -166,13 +176,8 @@ bot.onText(/\/stop/, (msg) => {
   const chatId = msg.chat.id;
   console.log(`Processing /stop for chat ${chatId}`);
   activeChats.delete(chatId);
-  if (activeChats.size === 0 && pollingActive) {
-    pollingActive = false;
-    if (pollIntervalId) clearInterval(pollIntervalId);
-    console.log('Stopped polling for transactions.');
-  }
   bot.sendMessage(chatId, 'Stopped tracking PETS buys.')
-    .catch(err => console.error(`Failed to send /stop message to ${chatId}:`, err.message));
+    .catch(err => console.error(`Failed to send /stop message to ${chatId}:`, err));
 });
 
 bot.onText(/\/stats/, async (msg) => {
@@ -198,7 +203,8 @@ bot.onText(/\/stats/, async (msg) => {
       const { to, value } = returnValues;
       const isPairTrade = await isDexTrade(transactionHash, 'BSC');
       const category = categorizeBuy(value, bscWeb3);
-      bscMessage = `BSC Last Transaction:\nCategory: ${category}\nAmount: ${bscWeb3.utils.fromWei(value, 'ether')} PETS\nTo: ${to}\nPair Trade: ${isPairTrade ? 'Yes' : 'No'}`;
+      const video = categoryVideos[category] || '/videos/default.mp4';
+      bscMessage = `BSC Latest Transaction:\nCategory: ${category}\nAmount: ${bscWeb3.utils.fromWei(value, 'ether')} PETS\nTo: ${to}\nPair Trade: ${isPairTrade ? 'Yes' : 'No'}\nVideo: ${VERCEL_URL}${video}`;
     }
   } catch (err) {
     console.error(`Error fetching BSC stats:`, err.message);
@@ -218,7 +224,8 @@ bot.onText(/\/stats/, async (msg) => {
       const { to, value } = returnValues;
       const isPairTrade = await isDexTrade(transactionHash, 'Ethereum');
       const category = categorizeBuy(value, ethWeb3);
-      ethMessage = `Ethereum Last Transaction:\nCategory: ${category}\nAmount: ${ethWeb3.utils.fromWei(value, 'ether')} PETS\nTo: ${to}\nPair Trade: ${isPairTrade ? 'Yes' : 'No'}`;
+      const video = categoryVideos[category] || '/videos/default.mp4';
+      ethMessage = `Ethereum Latest Transaction:\nCategory: ${category}\nAmount: ${ethWeb3.utils.fromWei(value, 'ether')} PETS\nTo: ${to}\nPair Trade: ${isPairTrade ? 'Yes' : 'No'}\nVideo: ${VERCEL_URL}${video}`;
     }
   } catch (err) {
     console.error(`Error fetching Ethereum stats:`, err.message);
@@ -227,7 +234,7 @@ bot.onText(/\/stats/, async (msg) => {
 
   const message = `Latest $PETS Transactions:\n\n${bscMessage}\n\n${ethMessage}`;
   bot.sendMessage(chatId, message)
-    .catch(err => console.error(`Failed to send /stats message to ${chatId}:`, err.message));
+    .catch(err => console.error(`Failed to send /stats message to ${chatId}:`, err));
 });
 
 bot.onText(/\/help/, (msg) => {
@@ -238,7 +245,7 @@ bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
   console.log(`Processing /help for chat ${chatId}`);
   bot.sendMessage(chatId, 'Available commands:\n/start - Start the bot\n/track - Enable buy alerts\n/stop - Disable buy alerts\n/stats - View latest $PETS tx on BSC & ETH\n/status - Check tracking status\n/help - Show this message')
-    .catch(err => console.error(`Failed to send /help message to ${chatId}:`, err.message));
+    .catch(err => console.error(`Failed to send /help message to ${chatId}:`, err));
 });
 
 bot.onText(/\/status/, (msg) => {
@@ -250,45 +257,47 @@ bot.onText(/\/status/, (msg) => {
   console.log(`Processing /status for chat ${chatId}`);
   const isTracking = activeChats.has(chatId);
   bot.sendMessage(chatId, `Status: ${isTracking ? 'Tracking enabled' : 'Tracking disabled'}\nTotal tracked transactions: ${transactions.length}`)
-    .catch(err => console.error(`Failed to send /status message to ${chatId}:`, err.message));
+    .catch(err => console.error(`Failed to send /status message to ${chatId}:`, err));
 });
 
-// Polling function
-const monitorTransactions = () => {
+// Polling function with rate limit handling
+const monitorTransactions = async () => {
   const pollInterval = 120 * 1000; // Poll every 120 seconds
-  const maxBlocksPerPoll = 5; // Process 5 blocks per poll
-  let retryDelay = 2000; // Initial retry delay
+  const maxBlocksPerPoll = 5; // Reduced to 5 blocks per poll
+  let retryDelay = 5000; // Initial retry delay for rate limits
+  let bscFailureCount = 0; // Track consecutive BSC failures
 
-  const pollChain = async (chain, web3, contract, lastBlock, router) => {
-    if (activeChats.size === 0) return lastBlock; // Skip if no active chats
+  const pollBsc = async () => {
+    if (activeChats.size === 0) {
+      console.log('No active chats. Skipping BSC polling.');
+      return;
+    }
     try {
-      const latestBlock = await web3.eth.getBlockNumber();
-      if (lastBlock === 0) lastBlock = latestBlock - BigInt(maxBlocksPerPoll);
+      const latestBlock = await bscWeb3.eth.getBlockNumber();
+      if (lastBscBlock === 0) lastBscBlock = latestBlock - BigInt(maxBlocksPerPoll);
 
-      const fromBlock = lastBlock;
+      const fromBlock = lastBscBlock;
       const toBlock = latestBlock > fromBlock + BigInt(maxBlocksPerPoll) ? fromBlock + BigInt(maxBlocksPerPoll) : latestBlock;
 
       if (fromBlock >= toBlock) {
-        console.log(`No new blocks to poll on ${chain}.`);
-        return lastBlock;
+        console.log('No new blocks to poll on BSC.');
+        return;
       }
 
-      const events = await contract.getPastEvents('Transfer', {
+      const events = await bscContract.getPastEvents('Transfer', {
         fromBlock: Number(fromBlock),
         toBlock: Number(toBlock)
       });
 
-      const newTxs = [];
       for (const event of events) {
         const { returnValues, transactionHash } = event;
         const { to, value } = returnValues;
-        const isPairTrade = await isDexTrade(transactionHash, chain);
-        if (!isPairTrade) continue; // Only process DEX trades
-        const category = categorizeBuy(value, web3);
+        const isPairTrade = await isDexTrade(transactionHash, 'BSC');
+        const category = categorizeBuy(value, bscWeb3);
         const tx = {
-          chain,
+          chain: 'BSC',
           to,
-          amount: web3.utils.fromWei(value, 'ether'),
+          amount: bscWeb3.utils.fromWei(value, 'ether'),
           category,
           video: categoryVideos[category] || '/videos/default.mp4',
           timestamp: Date.now(),
@@ -298,54 +307,129 @@ const monitorTransactions = () => {
 
         if (!transactions.some(t => t.transactionHash === tx.transactionHash)) {
           transactions.push(tx);
-          if (transactions.length > 50) transactions.shift();
-          newTxs.push(tx);
-        }
-      }
+          if (transactions.length > 100) transactions.shift();
 
-      // Batch notifications
-      if (newTxs.length > 0) {
-        for (const chatId of activeChats) {
-          const message = newTxs.map(tx => 
-            `🚀 ${tx.category} on ${chain}${tx.isPairTrade ? ' (Pair Trade)' : ''}\nTo: ${to}\nAmount: ${tx.amount} PETS`
-          ).join('\n\n');
-          try {
-            await bot.sendMessage(chatId, message);
-            if (newTxs[0].video) {
-              await bot.sendVideo(chatId, `${VERCEL_URL}${newTxs[0].video}`, { caption: newTxs[0].category });
+          for (const chatId of activeChats) {
+            try {
+              await bot.sendVideo(chatId, `${VERCEL_URL}${tx.video}`, {
+                caption: `🚀 New ${category} on BSC${isPairTrade ? ' (Pair Trade)' : ''}!\nTo: ${to}\nAmount: ${tx.amount} PETS`
+              });
+            } catch (err) {
+              console.error(`Failed to send video to chat ${chatId}:`, err);
             }
-          } catch (err) {
-            console.error(`Failed to send to chat ${chatId}:`, err.message);
           }
         }
       }
 
-      console.log(`Polled ${chain} up to block ${toBlock}`);
-      return toBlock + BigInt(1);
+      lastBscBlock = toBlock + BigInt(1);
+      retryDelay = 5000; // Reset retry delay on success
+      bscFailureCount = 0; // Reset failure count on success
     } catch (err) {
-      console.error(`Error polling ${chain}:`, err.message);
-      if (err.message.includes('limit exceeded') || err.message.includes('socket hang up')) {
-        console.log(`Retrying ${chain} in ${retryDelay / 1000}s`);
+      console.error('Error polling BSC Transfer events:', err.message);
+      if (err.message.includes('limit exceeded')) {
+        bscFailureCount++;
+        console.log(`Rate limit hit on BSC (Failure ${bscFailureCount}). Retrying in ${retryDelay / 1000} seconds.`);
+
+        // Switch provider after 3 consecutive failures
+        if (bscFailureCount >= 3) {
+          currentBscProviderIndex = (currentBscProviderIndex + 1) % INFURA_BSC_URLS.length;
+          console.log(`Switching BSC provider to ${INFURA_BSC_URLS[currentBscProviderIndex]}`);
+          initializeBscWeb3();
+          bscContract = new bscWeb3.eth.Contract(ERC20_ABI, PETS_BSC_ADDRESS);
+          bscFailureCount = 0;
+          retryDelay = 5000; // Reset delay after switching
+        }
+
         await new Promise(resolve => setTimeout(resolve, retryDelay));
-        retryDelay = Math.min(retryDelay * 2, 30000); // Max 30s
+        retryDelay = Math.min(retryDelay * 2, 60000); // Exponential backoff, max 60s
       }
-      return lastBlock;
     }
   };
 
-  pollIntervalId = setInterval(async () => {
-    if (pollingActive) {
-      lastBscBlock = await pollChain('BSC', bscWeb3, bscContract, lastBscBlock, PANCAKESWAP_ROUTER);
-      lastEthBlock = await pollChain('Ethereum', ethWeb3, ethContract, lastEthBlock, UNISWAP_ROUTER);
+  const pollEth = async () => {
+    if (activeChats.size === 0) {
+      console.log('No active chats. Skipping Ethereum polling.');
+      return;
     }
-  }, pollInterval);
+    try {
+      const latestBlock = await ethWeb3.eth.getBlockNumber();
+      if (lastEthBlock === 0) lastEthBlock = latestBlock - BigInt(maxBlocksPerPoll);
+
+      const fromBlock = lastEthBlock;
+      const toBlock = latestBlock > fromBlock + BigInt(maxBlocksPerPoll) ? fromBlock + BigInt(maxBlocksPerPoll) : latestBlock;
+
+      if (fromBlock >= toBlock) {
+        console.log('No new blocks to poll on Ethereum.');
+        return;
+      }
+
+      const events = await ethContract.getPastEvents('Transfer', {
+        fromBlock: Number(fromBlock),
+        toBlock: Number(toBlock)
+      });
+
+      for (const event of events) {
+        const { returnValues, transactionHash } = event;
+        const { to, value } = returnValues;
+        const isPairTrade = await isDexTrade(transactionHash, 'Ethereum');
+        const category = categorizeBuy(value, ethWeb3);
+        const tx = {
+          chain: 'Ethereum',
+          to,
+          amount: ethWeb3.utils.fromWei(value, 'ether'),
+          category,
+          video: categoryVideos[category] || '/videos/default.mp4',
+          timestamp: Date.now(),
+          isPairTrade,
+          transactionHash
+        };
+
+        if (!transactions.some(t => t.transactionHash === tx.transactionHash)) {
+          transactions.push(tx);
+          if (transactions.length > 100) transactions.shift();
+
+          for (const chatId of activeChats) {
+            try {
+              await bot.sendVideo(chatId, `${VERCEL_URL}${tx.video}`, {
+                caption: `🚀 New ${category} on Ethereum${isPairTrade ? ' (Pair Trade)' : ''}!\nTo: ${to}\nAmount: ${tx.amount} PETS`
+              });
+            } catch (err) {
+              console.error(`Failed to send video to chat ${chatId}:`, err);
+            }
+          }
+        }
+      }
+
+      lastEthBlock = toBlock + BigInt(1);
+      retryDelay = 5000; // Reset retry delay on success
+    } catch (err) {
+      console.error('Error polling Ethereum Transfer events:', err.message);
+      if (err.message.includes('limit exceeded')) {
+        console.log(`Rate limit hit on Ethereum. Retrying in ${retryDelay / 1000} seconds.`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        retryDelay = Math.min(retryDelay * 2, 60000); // Exponential backoff, max 60s
+      }
+    }
+  };
+
+  // Run polling loops
+  setInterval(pollBsc, pollInterval);
+  setInterval(pollEth, pollInterval);
+
+  // Run immediately on start if there are active chats
+  if (activeChats.size > 0) {
+    await pollBsc();
+    await pollEth();
+  }
 };
 
-// Start monitoring (only when triggered by /track)
-monitorTransactions().catch(err => {
-  console.error('Failed to start monitoring:', err.message);
+// Start monitoring
+try {
+  monitorTransactions();
+} catch (err) {
+  console.error('Failed to start transaction monitoring:', err);
   process.exit(1);
-});
+}
 
 // API route for frontend
 app.get('/api/transactions', (req, res) => {
@@ -355,5 +439,5 @@ app.get('/api/transactions', (req, res) => {
   })));
 });
 
-// Export for serverless
+// Export for serverless handler
 export default app;
