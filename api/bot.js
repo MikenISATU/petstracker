@@ -1,7 +1,6 @@
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import Web3 from 'web3';
-import axios from 'axios';
 
 const app = express();
 app.use(express.json());
@@ -21,8 +20,6 @@ if (!TELEGRAM_BOT_TOKEN || !INFURA_BSC_URL || !INFURA_ETH_URL || !VERCEL_URL) {
 // Contract addresses
 const PETS_BSC_ADDRESS = '0x4bdece4e422fa015336234e4fc4d39ae6dd75b01';
 const PETS_ETH_ADDRESS = '0x98b794be9c4f49900c6193aaff20876e1f36043e';
-const PANCAKESWAP_ROUTER = '0x10ED43C718714eb63d5aA57B78B54704E256024E';
-const UNISWAP_ROUTER = '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D';
 
 // Initialize Web3 providers
 let bscWeb3, ethWeb3, bscContract, ethContract;
@@ -60,8 +57,6 @@ try {
 // In-memory data
 let transactions = [];
 let activeChats = new Set();
-let lastBscBlock = 0;
-let lastEthBlock = 0;
 
 // Categorize buy amounts
 const categorizeBuy = (amount) => {
@@ -72,61 +67,32 @@ const categorizeBuy = (amount) => {
   return 'Whale Buy';
 };
 
-// Video mapping (assumes videos in /public/videos)
-const categoryVideos = {
-  'MicroPets Buy': '/videos/micropets_small.mp4',
-  'Medium Bullish Buy': '/videos/micropets_medium.mp4',
-  'Whale Buy': '/videos/micropets_whale.mp4'
-};
-
-// Detect DEX trade
-const isDexTrade = async (txHash, chain) => {
-  const web3 = chain === 'BSC' ? bscWeb3 : ethWeb3;
-  const router = chain === 'BSC' ? PANCAKESWAP_ROUTER : UNISWAP_ROUTER;
-  try {
-    const tx = await web3.eth.getTransaction(txHash);
-    return tx && tx.to?.toLowerCase() === router.toLowerCase();
-  } catch (err) {
-    console.error(`[DEX Check Error] Chain: ${chain}, TxHash: ${txHash}, Error:`, err);
-    return false;
-  }
-};
-
-// Fetch PETS price in USD from CoinGecko with retry logic
-const getPetsPrice = async (retries = 3) => {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=micropets&vs_currencies=usd', {
-        timeout: 5000 // 5-second timeout
-      });
-      return response.data.micropets?.usd || 0.01; // Fallback price
-    } catch (err) {
-      console.error(`Failed to fetch PETS price (attempt ${attempt}/${retries}):`, err.message);
-      if (attempt === retries) return 0.01; // Final fallback
-      await new Promise(resolve => setTimeout(resolve, 2000 * attempt)); // Exponential backoff
-    }
-  }
-};
-
 // Initialize Telegram Bot with webhook
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
 const webhookPath = `/api/bot/${TELEGRAM_BOT_TOKEN}`;
 const webhookUrl = `${VERCEL_URL}${webhookPath}`;
 
-// Set webhook on startup
-const setWebhook = async () => {
-  try {
-    await bot.setWebHook(webhookUrl, {
-      allowed_updates: ['message'],
-      max_connections: 40,
-      drop_pending_updates: true
-    });
-    console.log(`Webhook set to ${webhookUrl}`);
-    const webhookInfo = await bot.getWebHookInfo();
-    console.log('Webhook info:', JSON.stringify(webhookInfo, null, 2));
-  } catch (err) {
-    console.error('Failed to set webhook:', err);
-    process.exit(1);
+// Retry logic for setting webhook
+const setWebhookWithRetry = async (retries = 5) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await bot.setWebHook(webhookUrl, {
+        allowed_updates: ['message'],
+        max_connections: 40,
+        drop_pending_updates: true
+      });
+      console.log(`Webhook set to ${webhookUrl} on attempt ${attempt}`);
+      const webhookInfo = await bot.getWebHookInfo();
+      console.log('Webhook info:', JSON.stringify(webhookInfo, null, 2));
+      return true;
+    } catch (err) {
+      console.error(`Failed to set webhook (attempt ${attempt}/${retries}):`, err.message);
+      if (attempt === retries) {
+        console.error('All attempts to set webhook failed. Continuing without webhook...');
+        return false;
+      }
+      await new Promise(resolve => setTimeout(resolve, 5000 * attempt)); // Exponential backoff
+    }
   }
 };
 
@@ -142,6 +108,74 @@ app.post(webhookPath, async (req, res) => {
   }
 });
 
+// Fetch the latest transaction
+const fetchLatestTransaction = async () => {
+  const price = 0.01; // Hardcoded fallback due to CoinGecko issues
+  let latestTx = null;
+
+  // BSC transaction
+  try {
+    const bscBlock = await bscWeb3.eth.getBlockNumber();
+    const bscEvents = await bscContract.getPastEvents('Transfer', {
+      fromBlock: Number(bscBlock) - 5, // Small range to avoid rate limits
+      toBlock: Number(bscBlock)
+    });
+    if (bscEvents.length > 0) {
+      const event = bscEvents[bscEvents.length - 1];
+      const { returnValues, transactionHash } = event;
+      const { to, value } = returnValues;
+      const amount = bscWeb3.utils.fromWei(value, 'ether');
+      latestTx = {
+        chain: 'BSC',
+        to,
+        amount,
+        usdAmount: amount * price,
+        category: categorizeBuy(value),
+        timestamp: Date.now(),
+        transactionHash
+      };
+    }
+  } catch (err) {
+    console.error('Error fetching latest BSC transaction:', err);
+  }
+
+  // Ethereum transaction
+  try {
+    const ethBlock = await ethWeb3.eth.getBlockNumber();
+    const ethEvents = await ethContract.getPastEvents('Transfer', {
+      fromBlock: Number(ethBlock) - 5, // Small range to avoid rate limits
+      toBlock: Number(ethBlock)
+    });
+    if (ethEvents.length > 0) {
+      const event = ethEvents[ethEvents.length - 1];
+      const { returnValues, transactionHash } = event;
+      const { to, value } = returnValues;
+      const amount = ethWeb3.utils.fromWei(value, 'ether');
+      const ethTx = {
+        chain: 'Ethereum',
+        to,
+        amount,
+        usdAmount: amount * price,
+        category: categorizeBuy(value),
+        timestamp: Date.now(),
+        transactionHash
+      };
+      // Compare timestamps if BSC transaction exists
+      if (!latestTx || ethTx.timestamp > latestTx.timestamp) {
+        latestTx = ethTx;
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching latest Ethereum transaction:', err);
+  }
+
+  if (latestTx) {
+    transactions.push(latestTx);
+    if (transactions.length > 100) transactions.shift();
+  }
+  return latestTx;
+};
+
 // Telegram commands
 bot.onText(/\/start/, async (msg) => {
   const startTime = Date.now();
@@ -149,7 +183,7 @@ bot.onText(/\/start/, async (msg) => {
   console.log(`Processing /start for chat ${chatId}`);
   activeChats.add(chatId);
   try {
-    await bot.sendMessage(chatId, 'Welcome to PETS Tracker! Use /track to start receiving buy alerts.');
+    await bot.sendMessage(chatId, 'Welcome to PETS Tracker! Use /track to see the latest transaction.');
     console.log(`/start processed in ${Date.now() - startTime}ms`);
   } catch (err) {
     console.error(`Failed to send /start message to ${chatId}:`, err);
@@ -162,20 +196,18 @@ bot.onText(/\/track/, async (msg) => {
   console.log(`Processing /track for chat ${chatId}`);
   activeChats.add(chatId);
   try {
-    const recentTxs = await fetchRecentTransactions();
-    let message = 'Started tracking PETS buys. Recent transactions:\n';
-    if (recentTxs.length === 0) {
-      message += 'No recent transactions found.';
+    const latestTx = await fetchLatestTransaction();
+    let message = 'Tracking PETS buys. Latest transaction:\n';
+    if (latestTx) {
+      message += `${latestTx.chain} ${latestTx.category}: ${latestTx.amount} PETS ($${latestTx.usdAmount.toFixed(2)}) at ${new Date(latestTx.timestamp).toLocaleString()}\n`;
     } else {
-      for (const tx of recentTxs) {
-        message += `${tx.chain} ${tx.category}: ${tx.amount} PETS ($${tx.usdAmount.toFixed(2)}) at ${new Date(tx.timestamp).toLocaleString()}\n`;
-      }
+      message += 'No recent transactions found.';
     }
     await bot.sendMessage(chatId, message);
     console.log(`/track processed in ${Date.now() - startTime}ms`);
   } catch (err) {
     console.error(`Failed to send /track message to ${chatId}:`, err);
-    await bot.sendMessage(chatId, 'Error fetching recent transactions. Tracking started.');
+    await bot.sendMessage(chatId, 'Error fetching latest transaction. Tracking started.');
   }
 });
 
@@ -200,14 +232,12 @@ bot.onText(/\/stats/, async (msg) => {
   const summary = {
     'MicroPets Buy': 0,
     'Medium Bullish Buy': 0,
-    'Whale Buy': 0,
-    pairTrades: 0
+    'Whale Buy': 0
   };
   lastFive.forEach(tx => {
     summary[tx.category]++;
-    if (tx.isPairTrade) summary.pairTrades++;
   });
-  const message = `Last 5 Transactions Stats:\nMicroPets: ${summary['MicroPets Buy']}\nMedium: ${summary['Medium Bullish Buy']}\nWhale: ${summary['Whale Buy']}\nPair Trades: ${summary.pairTrades}`;
+  const message = `Last 5 Transactions Stats:\nMicroPets: ${summary['MicroPets Buy']}\nMedium: ${summary['Medium Bullish Buy']}\nWhale: ${summary['Whale Buy']}`;
   try {
     await bot.sendMessage(chatId, message);
     console.log(`/stats processed in ${Date.now() - startTime}ms`);
@@ -241,159 +271,16 @@ bot.onText(/\/status/, async (msg) => {
   }
 });
 
-// Fetch recent transactions
-const fetchRecentTransactions = async () => {
-  const transactions = [];
-  const price = await getPetsPrice();
-
-  // BSC transactions
-  try {
-    const bscBlock = await bscWeb3.eth.getBlockNumber();
-    const bscEvents = await bscContract.getPastEvents('Transfer', {
-      fromBlock: Number(bscBlock) - 20, // Reduced to avoid rate limits
-      toBlock: Number(bscBlock)
-    });
-    for (const event of bscEvents.slice(-2)) {
-      const { returnValues, transactionHash } = event;
-      const { to, value } = returnValues;
-      const amount = bscWeb3.utils.fromWei(value, 'ether');
-      const isPairTrade = await isDexTrade(transactionHash, 'BSC');
-      transactions.push({
-        chain: 'BSC',
-        to,
-        amount,
-        usdAmount: amount * price,
-        category: categorizeBuy(value),
-        timestamp: Date.now(),
-        isPairTrade,
-        transactionHash
-      });
-    }
-  } catch (err) {
-    console.error('Error fetching BSC transactions:', err);
-  }
-
-  // Ethereum transactions
-  try {
-    const ethBlock = await ethWeb3.eth.getBlockNumber();
-    const ethEvents = await ethContract.getPastEvents('Transfer', {
-      fromBlock: Number(ethBlock) - 20, // Reduced to avoid rate limits
-      toBlock: Number(ethBlock)
-    });
-    for (const event of ethEvents.slice(-2)) {
-      const { returnValues, transactionHash } = event;
-      const { to, value } = returnValues;
-      const amount = ethWeb3.utils.fromWei(value, 'ether');
-      const isPairTrade = await isDexTrade(transactionHash, 'Ethereum');
-      transactions.push({
-        chain: 'Ethereum',
-        to,
-        amount,
-        usdAmount: amount * price,
-        category: categorizeBuy(value),
-        timestamp: Date.now(),
-        isPairTrade,
-        transactionHash
-      });
-    }
-  } catch (err) {
-    console.error('Error fetching Ethereum transactions:', err);
-  }
-
-  return transactions.sort((a, b) => b.timestamp - a.timestamp).slice(0, 4);
-};
-
-// Monitor transactions
-const monitorTransactions = async () => {
-  const pollInterval = 30 * 1000; // Poll every 30 seconds
-  const maxBlocksPerPoll = 10; // Reduced to avoid rate limits
-
-  const pollChain = async (chain, web3, contract, lastBlock, router) => {
-    try {
-      const latestBlock = await web3.eth.getBlockNumber();
-      if (lastBlock === 0) lastBlock = latestBlock - BigInt(maxBlocksPerPoll);
-
-      const fromBlock = lastBlock;
-      const toBlock = latestBlock > fromBlock + BigInt(maxBlocksPerPoll) ? fromBlock + BigInt(maxBlocksPerPoll) : latestBlock;
-
-      if (fromBlock >= toBlock) {
-        console.log(`No new blocks to poll on ${chain}.`);
-        return lastBlock;
-      }
-
-      const events = await contract.getPastEvents('Transfer', {
-        fromBlock: Number(fromBlock),
-        toBlock: Number(toBlock)
-      });
-
-      const price = await getPetsPrice();
-      for (const event of events) {
-        const { returnValues, transactionHash } = event;
-        const { to, value } = returnValues;
-        const isPairTrade = await isDexTrade(transactionHash, chain);
-        const amount = web3.utils.fromWei(value, 'ether');
-        const category = categorizeBuy(value);
-        const tx = {
-          chain,
-          to,
-          amount,
-          usdAmount: amount * price,
-          category,
-          video: categoryVideos[category] || '/videos/default.mp4',
-          timestamp: Date.now(),
-          isPairTrade,
-          transactionHash
-        };
-
-        if (!transactions.some(t => t.transactionHash === tx.transactionHash)) {
-          transactions.push(tx);
-          if (transactions.length > 100) transactions.shift();
-
-          for (const chatId of activeChats) {
-            try {
-              await bot.sendVideo(chatId, `${VERCEL_URL}${tx.video}`, {
-                caption: `🚀 New ${category} on ${chain}${isPairTrade ? ' (Pair Trade)' : ''}!\nTo: ${to}\nAmount: ${tx.amount} PETS ($${tx.usdAmount.toFixed(2)})`
-              });
-            } catch (err) {
-              console.error(`Failed to send video to chat ${chatId}:`, err);
-            }
-          }
-        }
-      }
-
-      return toBlock + BigInt(1);
-    } catch (err) {
-      console.error(`Error polling ${chain} Transfer events:`, err.message);
-      if (err.message.includes('limit exceeded')) {
-        console.log(`Rate limit hit on ${chain}. Retrying in 15 seconds.`);
-        await new Promise(resolve => setTimeout(resolve, 15000)); // Increased retry delay
-      }
-      return lastBlock;
-    }
-  };
-
-  const poll = async () => {
-    lastBscBlock = await pollChain('BSC', bscWeb3, bscContract, lastBscBlock, PANCAKESWAP_ROUTER);
-    lastEthBlock = await pollChain('Ethereum', ethWeb3, ethContract, lastEthBlock, UNISWAP_ROUTER);
-  };
-
-  setInterval(poll, pollInterval);
-  await poll();
-};
-
-// Start webhook and monitoring
-Promise.all([setWebhook(), monitorTransactions()])
+// Start webhook
+setWebhookWithRetry()
   .catch(err => {
-    console.error('Failed to initialize bot or monitoring:', err);
-    process.exit(1);
+    console.error('Failed to initialize webhook after retries:', err);
+    // Do not exit, allow the bot to continue running
   });
 
 // API route for frontend
 app.get('/api/transactions', (req, res) => {
-  res.json(transactions.map(tx => ({
-    ...tx,
-    video: `${VERCEL_URL}${tx.video}`
-  })));
+  res.json(transactions);
 });
 
 export default app;
