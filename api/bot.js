@@ -109,11 +109,12 @@ const isDexTrade = async (txHash, chain) => {
   }
 };
 
-// Initialize Telegram Bot with webhook
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
-console.log(`Set webhook: curl -X GET "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${VERCEL_URL}/api/bot"`);
+// Initialize Telegram Bot with polling as fallback
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+console.warn('Polling enabled as fallback. Set webhook for production:');
+console.log(`curl -X GET "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${VERCEL_URL}/api/bot"`);
 
-// Telegram webhook route
+// Telegram webhook route (for production)
 app.post('/api/bot', (req, res) => {
   try {
     console.log('Received Telegram update:', JSON.stringify(req.body));
@@ -160,7 +161,7 @@ bot.onText(/\/stats/, async (msg) => {
   try {
     const latestBscBlock = await bscWeb3.eth.getBlockNumber();
     const events = await bscContract.getPastEvents('Transfer', {
-      fromBlock: Number(latestBscBlock) - 1,
+      fromBlock: Math.max(0, Number(latestBscBlock) - 1),
       toBlock: Number(latestBscBlock)
     });
     const lastEvent = events.sort((a, b) => b.blockNumber - a.blockNumber)[0];
@@ -180,7 +181,7 @@ bot.onText(/\/stats/, async (msg) => {
   try {
     const latestEthBlock = await ethWeb3.eth.getBlockNumber();
     const events = await ethContract.getPastEvents('Transfer', {
-      fromBlock: Number(latestEthBlock) - 1,
+      fromBlock: Math.max(0, Number(latestEthBlock) - 1),
       toBlock: Number(latestEthBlock)
     });
     const lastEvent = events.sort((a, b) => b.blockNumber - a.blockNumber)[0];
@@ -217,12 +218,13 @@ bot.onText(/\/status/, (msg) => {
 });
 
 // Polling function
-const monitorTransactions = async () => {
+const monitorTransactions = () => {
   const pollInterval = 120 * 1000; // Poll every 120 seconds
   const maxBlocksPerPoll = 5; // Process 5 blocks per poll
   let retryDelay = 2000; // Initial retry delay
 
   const pollChain = async (chain, web3, contract, lastBlock, router) => {
+    if (activeChats.size === 0) return lastBlock; // Skip if no active chats
     try {
       const latestBlock = await web3.eth.getBlockNumber();
       if (lastBlock === 0) lastBlock = latestBlock - BigInt(maxBlocksPerPoll);
@@ -269,7 +271,7 @@ const monitorTransactions = async () => {
       if (newTxs.length > 0) {
         for (const chatId of activeChats) {
           const message = newTxs.map(tx => 
-            `🚀 ${tx.category} on ${chain}${tx.isPairTrade ? ' (Pair Trade)' : ''}\nTo: ${tx.to}\nAmount: ${tx.amount} PETS`
+            `🚀 ${tx.category} on ${chain}${tx.isPairTrade ? ' (Pair Trade)' : ''}\nTo: ${to}\nAmount: ${tx.amount} PETS`
           ).join('\n\n');
           try {
             await bot.sendMessage(chatId, message);
@@ -282,6 +284,7 @@ const monitorTransactions = async () => {
         }
       }
 
+      console.log(`Polled ${chain} up to block ${toBlock}`);
       return toBlock + BigInt(1);
     } catch (err) {
       console.error(`Error polling ${chain}:`, err.message);
@@ -294,7 +297,7 @@ const monitorTransactions = async () => {
     }
   };
 
-  // Main polling loop
+  // Start polling loops
   const pollLoop = async () => {
     while (true) {
       if (activeChats.size > 0) {
@@ -305,7 +308,6 @@ const monitorTransactions = async () => {
     }
   };
 
-  // Start polling loop
   pollLoop().catch(err => console.error('Polling loop error:', err.message));
 };
 
