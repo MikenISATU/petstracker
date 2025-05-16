@@ -13,10 +13,11 @@ app.use(express.json());
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
 const INFURA_BSC_URL = process.env.INFURA_BSC_URL || 'https://bsc.nownodes.io/97a8bb57-9985-48b3-ad57-8054752cfcb5';
 const INFURA_ETH_URL = process.env.INFURA_ETH_URL || 'https://rpc.ankr.com/eth';
+const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'da4k3yxhu';
 const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-8mqe0par9-miles-kenneth-napilan-isatus-projects.vercel.app';
 
 // Validate environment variables
-if (!TELEGRAM_BOT_TOKEN || !INFURA_BSC_URL || !INFURA_ETH_URL || !VERCEL_URL) {
+if (!TELEGRAM_BOT_TOKEN || !INFURA_BSC_URL || !INFURA_ETH_URL || !CLOUDINARY_CLOUD_NAME) {
   console.error('Missing critical environment variables. Please check configuration.');
   process.exit(1);
 }
@@ -59,17 +60,26 @@ try {
   process.exit(1);
 }
 
-// ERC-20 Transfer ABI
-const ERC20_ABI = [{
-  anonymous: false,
-  inputs: [
-    { indexed: true, name: 'from', type: 'address' },
-    { indexed: true, name: 'to', type: 'address' },
-    { indexed: false, name: 'value', type: 'uint256' }
-  ],
-  name: 'Transfer',
-  type: 'event'
-}];
+// ERC-20 ABI (extended for totalSupply)
+const ERC20_ABI = [
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, name: 'from', type: 'address' },
+      { indexed: true, name: 'to', type: 'address' },
+      { indexed: false, name: 'value', type: 'uint256' }
+    ],
+    name: 'Transfer',
+    type: 'event'
+  },
+  {
+    constant: true,
+    inputs: [],
+    name: 'totalSupply',
+    outputs: [{ name: '', type: 'uint256' }],
+    type: 'function'
+  }
+];
 
 // Initialize contracts
 let bscContract, ethContract;
@@ -100,13 +110,24 @@ const getUSDTValue = (amountInPETS, chain) => {
   const web3 = chain === 'BSC' ? bscWeb3 : ethWeb3;
   if (!web3) return '0.00';
   const tokens = web3.utils.fromWei(amountInPETS, 'ether');
-  const pricePerPETS = 0.01;
+  const pricePerPETS = 0.01; // Placeholder; replace with real price feed
   return (parseFloat(tokens) * pricePerPETS).toFixed(2);
 };
 
-// Placeholder for Market Cap
-const getMarketCap = () => {
-  return '$10M';
+// Calculate Market Cap
+const getMarketCap = async (chain) => {
+  try {
+    const contract = chain === 'BSC' ? bscContract : ethContract;
+    const web3 = chain === 'BSC' ? bscWeb3 : ethWeb3;
+    const totalSupply = await contract.methods.totalSupply().call();
+    const tokens = web3.utils.fromWei(totalSupply, 'ether');
+    const pricePerPETS = 0.01; // Placeholder; replace with real price feed
+    const marketCap = (parseFloat(tokens) * pricePerPETS).toFixed(2);
+    return `$${marketCap}`;
+  } catch (err) {
+    console.error(`Error calculating market cap for ${chain}:`, err.message);
+    return '$10M';
+  }
 };
 
 // Categorize buy amounts
@@ -118,11 +139,11 @@ const categorizeBuy = (amount, web3) => {
   return 'Whale Buy';
 };
 
-// Video mapping
+// Video mapping (Cloudinary public IDs updated with new URLs)
 const categoryVideos = {
-  'MicroPets Buy': '/videos/micropets_small.mp4',
-  'Medium Bullish Buy': '/videos/micropets_medium.mp4',
-  'Whale Buy': '/videos/micropets_whale.mp4'
+  'MicroPets Buy': 'SMALLBUY_b3px1p',
+  'Medium Bullish Buy': 'MEDIUMBUY_MPEG_e02zdz',
+  'Whale Buy': 'micropets_big_msapxz'
 };
 
 // Video display placeholders
@@ -130,6 +151,12 @@ const categoryVideoDisplays = {
   'MicroPets Buy': '[Small Buy Video]',
   'Medium Bullish Buy': '[Medium Buy Video]',
   'Whale Buy': '[Large Buy Video]'
+};
+
+// Get Cloudinary video URL
+const getVideoUrl = (category) => {
+  const publicId = categoryVideos[category] || 'default';
+  return `https://res.cloudinary.com/${CLOUDINARY_CLOUD_NAME}/video/upload/${publicId}.mp4`;
 };
 
 // Detect DEX trade
@@ -212,10 +239,10 @@ bot.onText(/\/stats/, async (msg) => {
       const category = categorizeBuy(value, bscWeb3);
       const videoDisplay = categoryVideoDisplays[category] || '[Default Video]';
       const usdtValue = getUSDTValue(value, 'BSC');
-      const marketCap = getMarketCap();
+      const marketCap = await getMarketCap('BSC');
       const tokens = bscWeb3.utils.fromWei(value, 'ether');
       const bscScanUrl = `https://bscscan.com/tx/${transactionHash}`;
-      bscMessage = `@MicroPets Buy Bot\nMicroPets Buy - BNB Pair\n${videoDisplay}\nBNB Value: $${usdtValue}\nMarket Cap: ${marketCap}\nHoldings: ${tokens} $PETS\nHolder Address: ${to}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)`;
+      bscMessage = `@MicroPets Buy Bot\nMicroPets Buy - BNB Pair\n${videoDisplay}\n**💰 ETH Value**: $${usdtValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder Address**: ${to}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)`;
     }
   } catch (err) {
     console.error(`Error fetching BSC stats:`, err.message);
@@ -236,10 +263,10 @@ bot.onText(/\/stats/, async (msg) => {
       const category = categorizeBuy(value, ethWeb3);
       const videoDisplay = categoryVideoDisplays[category] || '[Default Video]';
       const usdtValue = getUSDTValue(value, 'Ethereum');
-      const marketCap = getMarketCap();
+      const marketCap = await getMarketCap('Ethereum');
       const tokens = ethWeb3.utils.fromWei(value, 'ether');
       const etherscanUrl = `https://etherscan.io/tx/${transactionHash}`;
-      ethMessage = `@MicroPets Buy Bot\nMicroPets Buy - ETH Pair\n${videoDisplay}\nETH Value: $${usdtValue}\nMarket Cap: ${marketCap}\nHoldings: ${tokens} $PETS\nHolder Address: ${to}\n[Etherscan](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=0x98b794be9c4f49900c6193aaff20876e1f36043e)`;
+      ethMessage = `@MicroPets Buy Bot\nMicroPets Buy - ETH Pair\n${videoDisplay}\n**💰 ETH Value**: $${usdtValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder Address**: ${to}\n[Etherscan](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=0x98b794be9c4f49900c6193aaff20876e1f36043e)`;
     }
   } catch (err) {
     console.error(`Error fetching Ethereum stats:`, err.message);
@@ -272,19 +299,18 @@ bot.onText(/\/test/, async (msg) => {
   const categories = ['MicroPets Buy', 'Medium Bullish Buy', 'Whale Buy'];
   const category = categories[Math.floor(Math.random() * categories.length)];
   const videoDisplay = categoryVideoDisplays[category] || '[Default Video]';
-  const videoPath = categoryVideos[category] || '/videos/default.mp4';
+  const videoUrl = getVideoUrl(category);
   const randomTxHash = '0x' + Array.from({length: 64}, () => Math.floor(Math.random() * 16).toString(16)).join('');
   const toAddress = '0x1234567890abcdef1234567890abcdef12345678';
   const tokens = category === 'MicroPets Buy' ? '500' : category === 'Medium Bullish Buy' ? '5000' : '15000';
   const usdtValue = (parseFloat(tokens) * 0.01).toFixed(2);
-  const marketCap = getMarketCap();
+  const marketCap = await getMarketCap(Math.random() > 0.5 ? 'BSC' : 'Ethereum');
   const chain = Math.random() > 0.5 ? 'BSC' : 'Ethereum';
   const scanUrl = chain === 'BSC' ? `https://bscscan.com/tx/${randomTxHash}` : `https://etherscan.io/tx/${randomTxHash}`;
   const message = chain === 'BSC'
-    ? `@MicroPets Buy Bot\nMicroPets Buy - BNB Pair\n${videoDisplay}\nBNB Value: $${usdtValue}\nMarket Cap: ${marketCap}\nHoldings: ${tokens} $PETS\nHolder Address: ${toAddress}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)`
-    : `@MicroPets Buy Bot\nMicroPets Buy - ETH Pair\n${videoDisplay}\nETH Value: $${usdtValue}\nMarket Cap: ${marketCap}\nHoldings: ${tokens} $PETS\nHolder Address: ${toAddress}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=0x98b794be9c4f49900c6193aaff20876e1f36043e)`;
+    ? `@MicroPets Buy Bot\nMicroPets Buy - BNB Pair\n${videoDisplay}\n**💰 ETH Value**: $${usdtValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder Address**: ${toAddress}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)`
+    : `@MicroPets Buy Bot\nMicroPets Buy - ETH Pair\n${videoDisplay}\n**💰 ETH Value**: $${usdtValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder Address**: ${toAddress}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=0x98b794be9c4f49900c6193aaff20876e1f36043e)`;
 
-  const videoUrl = `${VERCEL_URL}${videoPath}`;
   console.log(`Attempting to send video to chat ${chatId} with URL: ${videoUrl}`);
 
   try {
@@ -357,9 +383,9 @@ const monitorTransactions = async () => {
         const isPairTrade = await isDexTrade(transactionHash, 'BSC');
         const category = categorizeBuy(value, bscWeb3);
         const videoDisplay = categoryVideoDisplays[category] || '[Default Video]';
-        const videoPath = categoryVideos[category] || '/videos/default.mp4';
+        const videoUrl = getVideoUrl(category);
         const usdtValue = getUSDTValue(value, 'BSC');
-        const marketCap = getMarketCap();
+        const marketCap = await getMarketCap('BSC');
         const tokens = bscWeb3.utils.fromWei(value, 'ether');
         const bscScanUrl = `https://bscscan.com/tx/${transactionHash}`;
         const tx = {
@@ -367,7 +393,7 @@ const monitorTransactions = async () => {
           to,
           amount: tokens,
           category,
-          video: videoPath,
+          video: videoUrl,
           videoDisplay,
           timestamp: Date.now(),
           isPairTrade,
@@ -379,9 +405,8 @@ const monitorTransactions = async () => {
           if (transactions.length > 100) transactions.shift();
 
           for (const chatId of activeChats) {
-            const videoUrl = `${VERCEL_URL}${tx.video}`;
             console.log(`Attempting to send BSC video to chat ${chatId} with URL: ${videoUrl}`);
-            const message = `@MicroPets Buy Bot\nMicroPets Buy - BNB Pair\n${videoDisplay}\nBNB Value: $${usdtValue}\nMarket Cap: ${marketCap}\nHoldings: ${tokens} $PETS\nHolder Address: ${to}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)`;
+            const message = `@MicroPets Buy Bot\nMicroPets Buy - BNB Pair\n${videoDisplay}\n**💰 ETH Value**: $${usdtValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder Address**: ${to}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)`;
 
             try {
               await bot.sendVideo(chatId, videoUrl, {
@@ -434,9 +459,9 @@ const monitorTransactions = async () => {
         const isPairTrade = await isDexTrade(transactionHash, 'Ethereum');
         const category = categorizeBuy(value, ethWeb3);
         const videoDisplay = categoryVideoDisplays[category] || '[Default Video]';
-        const videoPath = categoryVideos[category] || '/videos/default.mp4';
+        const videoUrl = getVideoUrl(category);
         const usdtValue = getUSDTValue(value, 'Ethereum');
-        const marketCap = getMarketCap();
+        const marketCap = await getMarketCap('Ethereum');
         const tokens = ethWeb3.utils.fromWei(value, 'ether');
         const etherscanUrl = `https://etherscan.io/tx/${transactionHash}`;
         const tx = {
@@ -444,7 +469,7 @@ const monitorTransactions = async () => {
           to,
           amount: tokens,
           category,
-          video: videoPath,
+          video: videoUrl,
           videoDisplay,
           timestamp: Date.now(),
           isPairTrade,
@@ -456,9 +481,8 @@ const monitorTransactions = async () => {
           if (transactions.length > 100) transactions.shift();
 
           for (const chatId of activeChats) {
-            const videoUrl = `${VERCEL_URL}${tx.video}`;
             console.log(`Attempting to send ETH video to chat ${chatId} with URL: ${videoUrl}`);
-            const message = `@MicroPets Buy Bot\nMicroPets Buy - ETH Pair\n${videoDisplay}\nETH Value: $${usdtValue}\nMarket Cap: ${marketCap}\nHoldings: ${tokens} $PETS\nHolder Address: ${to}\n[Etherscan](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=0x98b794be9c4f49900c6193aaff20876e1f36043e)`;
+            const message = `@MicroPets Buy Bot\nMicroPets Buy - ETH Pair\n${videoDisplay}\n**💰 ETH Value**: $${usdtValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder Address**: ${to}\n[Etherscan](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=0x98b794be9c4f49900c6193aaff20876e1f36043e)`;
 
             try {
               await bot.sendVideo(chatId, videoUrl, {
@@ -506,7 +530,7 @@ try {
 app.get('/api/transactions', (req, res) => {
   res.json(transactions.map(tx => ({
     ...tx,
-    video: `${VERCEL_URL}${tx.video}`
+    video: tx.video
   })));
 });
 
