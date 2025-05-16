@@ -324,6 +324,7 @@ bot.onText(/\/test/, async (msg) => {
   const toAddress = '0x1234567890abcdef1234567890abcdef12345678';
   const tokens = category === 'MicroPets Buy' ? '500' : category === 'Medium Bullish Buy' ? '5000' : '15000';
   const chain = Math.random() > 0.5 ? 'BSC' : 'Ethereum';
+  const web3 = chain === 'BSC' ? bscWeb3 : ethWeb3;
   const tokenValue = await getTokenValue(web3.utils.toWei(tokens, 'ether'), chain);
   const marketCap = await getMarketCap(chain);
   const scanUrl = chain === 'BSC' ? `https://bscscan.com/tx/${randomTxHash}` : `https://etherscan.io/tx/${randomTxHash}`;
