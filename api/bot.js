@@ -15,10 +15,10 @@ app.use(express.json());
 
 // Environment variables with fallbacks
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
-const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY || 'YOUR_BSCSCAN_API_KEY';
-const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || 'YOUR_ETHERSCAN_API_KEY';
+const BSCSCAN_API_KEY = process.env.INFURA_BSC_URL || 'https://bsc.nownodes.io/97a8bb57-9985-48b3-ad57-8054752cfcb5';
+const ETHERSCAN_API_KEY = process.env.INFURA_ETH_URL || 'https://rpc.ankr.com/eth';
 const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'da4k3yxhu';
-const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-k87i7ndgm-miles-kenneth-napilan-isatus-projects.vercel.app';
+const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-8mqe0par9-miles-kenneth-napilan-isatus-projects.vercel.app';
 
 // Validate environment variables
 if (!TELEGRAM_BOT_TOKEN || !CLOUDINARY_CLOUD_NAME) {
