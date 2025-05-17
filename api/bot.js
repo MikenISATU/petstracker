@@ -36,7 +36,7 @@ if (BSCSCAN_API_KEY === 'YOUR_BSCSCAN_API_KEY' || ETHERSCAN_API_KEY === 'YOUR_ET
   process.exit(1);
 }
 
-// Contract and target addresses (from bnbpets.py and ethpets.py)
+// Contract and target addresses
 const PETS_BSC_ADDRESS = '0x2466858ab5edad0bb597fe9f008f568b00d25fe3';
 const PETS_BSC_TARGET_ADDRESS = '0x4BDECe4E422fA015336234e4FC4D39ae6dD75b01';
 const PETS_ETH_ADDRESS = '0x2466858ab5edAd0BB597FE9f008F568B00d25Fe3';
@@ -264,7 +264,7 @@ const setWebhook = async () => {
   try {
     await pRetry(
       () => axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${webhookUrl}`, {
-        timeout: 15000,
+        timeout: 20000, // Increased from 15000
         httpAgent,
       }),
       {
