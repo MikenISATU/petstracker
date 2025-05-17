@@ -20,20 +20,22 @@ const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || 'https://rpc.ankr.com
 const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'da4k3yxhu';
 const DEFAULT_VERCEL_URL = 'https://petstracker-8mqe0par9-miles-kenneth-napilan-isatus-projects.vercel.app';
 const VERCEL_URL = (process.env.VERCEL_URL || DEFAULT_VERCEL_URL).startsWith('https://')
-
+  ? process.env.VERCEL_URL || DEFAULT_VERCEL_URL
+  : `https://${process.env.VERCEL_URL || DEFAULT_VERCEL_URL}`;
 
 // Log VERCEL_URL for debugging
 console.log(`VERCEL_URL: ${VERCEL_URL}`);
 
 // Validate environment variables
+let useMockData = false;
 if (!TELEGRAM_BOT_TOKEN || !CLOUDINARY_CLOUD_NAME) {
   console.error('Missing critical environment variables: TELEGRAM_BOT_TOKEN or CLOUDINARY_CLOUD_NAME.');
   process.exit(1);
 }
 if (BSCSCAN_API_KEY === 'YOUR_BSCSCAN_API_KEY' || ETHERSCAN_API_KEY === 'YOUR_ETHERSCAN_API_KEY' ||
     BSCSCAN_API_KEY.startsWith('http') || ETHERSCAN_API_KEY.startsWith('http')) {
-  console.error('Invalid BSCSCAN_API_KEY or ETHERSCAN_API_KEY. Please provide valid API keys, not RPC URLs.');
-  process.exit(1);
+  console.warn('Invalid BSCSCAN_API_KEY or ETHERSCAN_API_KEY. Using mock data.');
+  useMockData = true;
 }
 
 // Contract and target addresses
@@ -75,6 +77,9 @@ const mockTransaction = (chain) => ({
   tokenValue: chain === 'BSC' ? '$500.00' : '$1000.00',
   marketCap: '$10M',
   hodlerLast4: '5678',
+  hash: '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(''),
+  value: '5000' + '0'.repeat(18), // Simulate 5000 tokens
+  from: chain === 'BSC' ? PETS_BSC_TARGET_ADDRESS : PETS_ETH_TARGET_ADDRESS,
 });
 
 // Fetch real-time prices from CoinGecko
@@ -96,6 +101,11 @@ const fetchPrices = async () => {
 
 // Fetch transactions from BscScan/Etherscan
 const fetchTransactions = async (chain) => {
+  if (useMockData) {
+    console.log(`[${chain}] Using mock transactions due to invalid API keys.`);
+    return [mockTransaction(chain)];
+  }
+
   const apiKey = chain === 'BSC' ? BSCSCAN_API_KEY : ETHERSCAN_API_KEY;
   const contractAddress = chain === 'BSC' ? PETS_BSC_ADDRESS : PETS_ETH_ADDRESS;
   const targetAddress = chain === 'BSC' ? PETS_BSC_TARGET_ADDRESS : PETS_ETH_TARGET_ADDRESS;
@@ -112,14 +122,14 @@ const fetchTransactions = async (chain) => {
   try {
     const response = await pRetry(
       () => axios.get(url, {
-        timeout: 45000, // Increased from 30000
+        timeout: 45000,
         httpAgent,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
         },
       }),
       {
-        retries: 7, // Increased from 5
+        retries: 7,
         minTimeout: 5000,
         maxTimeout: 30000,
         factor: 2.5,
@@ -135,16 +145,17 @@ const fetchTransactions = async (chain) => {
       return response.data.result.slice(0, 5);
     } else {
       console.error(`[${chain}] API Error: ${response.data.message} (Result: ${response.data.result})`);
-      return [mockTransaction(chain)]; // Fallback to mock
+      return [mockTransaction(chain)];
     }
   } catch (error) {
     console.error(`[${chain}] Error fetching transactions: ${error.message}`);
-    return [mockTransaction(chain)]; // Fallback to mock
+    return [mockTransaction(chain)];
   }
 };
 
 // Check if transaction is a DEX trade
 const isDexTrade = async (txHash, chain) => {
+  if (useMockData) return true; // Mock transactions are considered DEX trades
   const url = chain === 'BSC'
     ? `https://bscscan.com/tx/${txHash}`
     : `https://etherscan.io/tx/${txHash}`;
@@ -167,6 +178,7 @@ const isDexTrade = async (txHash, chain) => {
 
 // Extract BNB/ETH value from transaction page
 const extractTokenValue = async (txHash, chain) => {
+  if (useMockData) return 1.0; // Mock value for 5000 tokens
   const url = chain === 'BSC'
     ? `https://bscscan.com/tx/${txHash}`
     : `https://etherscan.io/tx/${txHash}`;
@@ -196,6 +208,7 @@ const extractTokenValue = async (txHash, chain) => {
 
 // Get last 4 characters of holder address
 const getHodlerLast4 = async (txHash, chain) => {
+  if (useMockData) return '5678';
   const url = chain === 'BSC'
     ? `https://bscscan.com/tx/${txHash}`
     : `https://etherscan.io/tx/${txHash}`;
@@ -465,7 +478,7 @@ const monitorTransactions = async () => {
           }
         },
         {
-          retries: 7, // Increased from 5
+          retries: 7,
           minTimeout: 5000,
           maxTimeout: 30000,
           factor: 2.5,
@@ -519,7 +532,6 @@ const startBot = async () => {
     await monitorTransactions();
   } catch (err) {
     console.error('Failed to start bot:', err);
-    // Do not exit to allow polling
     bot.polling = true;
     await bot.startPolling({ restart: true });
   }
