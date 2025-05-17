@@ -21,8 +21,12 @@ const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'da4k3yxhu';
 const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-8mqe0par9-miles-kenneth-napilan-isatus-projects.vercel.app';
 
 // Validate environment variables
-if (!TELEGRAM_BOT_TOKEN || !BSCSCAN_API_KEY || !ETHERSCAN_API_KEY || !CLOUDINARY_CLOUD_NAME) {
-  console.error('Missing critical environment variables. Please check configuration.');
+if (!TELEGRAM_BOT_TOKEN || !CLOUDINARY_CLOUD_NAME) {
+  console.error('Missing critical environment variables: TELEGRAM_BOT_TOKEN or CLOUDINARY_CLOUD_NAME.');
+  process.exit(1);
+}
+if (BSCSCAN_API_KEY === 'YOUR_BSCSCAN_API_KEY' || ETHERSCAN_API_KEY === 'YOUR_ETHERSCAN_API_KEY') {
+  console.error('BSCSCAN_API_KEY or ETHERSCAN_API_KEY not set. Please provide valid API keys.');
   process.exit(1);
 }
 
@@ -34,8 +38,9 @@ const PETS_ETH_TARGET_ADDRESS = '0x98B794be9C4f49900C6193aAff20876E1F36043e';
 
 // Configure HTTP keep-alive agent
 const httpAgent = new Agent({
-  keepAliveTimeout: 30000,
-  keepAliveMaxTimeout: 60000,
+  keepAliveTimeout: 60000,
+  keepAliveMaxTimeout: 120000,
+  connections: 10,
 });
 
 // In-memory data
@@ -47,7 +52,7 @@ let postedTransactions = new Set();
 const fetchPrices = async () => {
   try {
     const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=binancecoin,ethereum&vs_currencies=usd', {
-      timeout: 10000,
+      timeout: 15000,
       httpAgent,
     });
     return {
@@ -70,11 +75,29 @@ const fetchTransactions = async (chain) => {
     : `https://api.etherscan.io/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}`;
 
   try {
-    const response = await axios.get(url, { timeout: 10000, httpAgent });
+    const response = await pRetry(
+      () => axios.get(url, {
+        timeout: 15000,
+        httpAgent,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+        },
+      }),
+      {
+        retries: 3,
+        minTimeout: 2000,
+        maxTimeout: 8000,
+        onFailedAttempt: (error) => {
+          console.error(`[${chain}] Fetch attempt ${error.attemptNumber} failed: ${error.message}`);
+        },
+      }
+    );
+
     if (response.data.status === '1') {
+      console.log(`[${chain}] Successfully fetched ${response.data.result.length} transactions.`);
       return response.data.result.slice(0, 20);
     } else {
-      console.error(`[${chain}] API Error: ${response.data.message}`);
+      console.error(`[${chain}] API Error: ${response.data.message} (Result: ${response.data.result})`);
       return [];
     }
   } catch (error) {
@@ -93,7 +116,7 @@ const isDexTrade = async (txHash, chain) => {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
       },
-      timeout: 10000,
+      timeout: 15000,
       httpAgent,
     });
     const $ = load(response.data);
@@ -115,7 +138,7 @@ const extractTokenValue = async (txHash, chain) => {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
       },
-      timeout: 10000,
+      timeout: 15000,
       httpAgent,
     });
     const $ = load(response.data);
@@ -144,7 +167,7 @@ const getHodlerLast4 = async (txHash, chain) => {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
       },
-      timeout: 10000,
+      timeout: 15000,
       httpAgent,
     });
     const $ = load(response.data);
@@ -288,7 +311,7 @@ bot.onText(/\/test/, async (msg) => {
   const scanUrl = chain === 'BSC' ? `https://bscscan.com/tx/${randomTxHash}` : `https://etherscan.io/tx/${randomTxHash}`;
   const message = chain === 'BSC'
     ? `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${videoDisplay}\n**💰 BNB Value**: ${tokenValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder**: ...${hodlerLast4}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`
-    : `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${videoDisplay}\n**💰 ETH Value**: ${tokenValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder**: ...${hodlerLast4}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6393aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
+    : `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${videoDisplay}\n**💰 ETH Value**: ${tokenValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder**: ...${hodlerLast4}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
 
   try {
     await bot.sendVideo(chatId, videoUrl, {
@@ -364,7 +387,7 @@ const processTransaction = async (tx, chain, prices) => {
 
 // Polling function
 const monitorTransactions = async () => {
-  const pollInterval = 60 * 1000;
+  const pollInterval = 120 * 1000; // Increased to 120s to reduce rate limit issues
 
   const pollWithRetry = async (fn, chain) => {
     return pRetry(
@@ -377,7 +400,7 @@ const monitorTransactions = async () => {
         }
       },
       {
-        retries: 3,
+        retries: 5,
         minTimeout: 2000,
         maxTimeout: 16000,
         factor: 2,
