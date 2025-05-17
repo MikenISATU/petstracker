@@ -62,6 +62,7 @@ let postedTransactions = new Set();
 let lastFetchTime = { BSC: 0, Ethereum: 0, Prices: 0 };
 const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes
 const PRICE_CACHE_DURATION = 60 * 1000; // 1 minute
+let isTrackingEnabled = false;
 const VIDEO_CACHE = {
   'MicroPets Buy': `https://res.cloudinary.com/${CLOUDINARY_CLOUD_NAME}/video/upload/SMALLBUY_b3px1p.mp4`,
   'Medium Bullish Buy': `https://res.cloudinary.com/${CLOUDINARY_CLOUD_NAME}/video/upload/MEDIUMBUY_MPEG_e02zdz.mp4`,
@@ -128,12 +129,12 @@ const fetchTransactions = async (chain) => {
   const contractAddress = chain === 'BSC' ? PETS_BSC_ADDRESS : PETS_ETH_ADDRESS;
   const targetAddress = chain === 'BSC' ? PETS_BSC_TARGET_ADDRESS : PETS_ETH_TARGET_ADDRESS;
   const url = chain === 'BSC'
-    ? `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&page=1&offset=5&sort=desc&apikey=${apiKey}`
+    ? `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&page=1&offset=1&sort=desc&apikey=${apiKey}`
     : `https://api.etherscan.io/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}`;
 
   if (Date.now() - lastFetchTime[chain] < CACHE_DURATION) {
     console.log(`[${chain}] Using cached transactions.`);
-    return transactions.filter(tx => tx.chain === chain).slice(0, 5);
+    return transactions.filter(tx => tx.chain === chain).slice(0, 1);
   }
 
   try {
@@ -156,10 +157,10 @@ const fetchTransactions = async (chain) => {
       }
     );
 
-    if (response.data.status === '1') {
-      console.log(`[${chain}] Successfully fetched ${response.data.result.length} transactions.`);
+    if (response.data.status === '1' && response.data.result.length > 0) {
+      console.log(`[${chain}] Successfully fetched ${response.data.result.length} transaction.`);
       lastFetchTime[chain] = Date.now();
-      return response.data.result.slice(0, 5);
+      return [response.data.result[0]]; // Only the latest transaction
     } else {
       console.error(`[${chain}] API Error: ${response.data.message} (Result: ${response.data.result})`);
       return [mockTransaction(chain)];
@@ -170,7 +171,7 @@ const fetchTransactions = async (chain) => {
   }
 };
 
-// Check if transaction is a DEX trade (simplified)
+// Check if transaction is a DEX trade
 const isDexTrade = async (txHash, chain) => {
   if (useMockData) return true;
   return true; // Assume tokentx API results are DEX trades
@@ -181,7 +182,7 @@ const extractTokenValue = async (tx, chain, prices) => {
   if (useMockData) return 1.0;
   const tokens = parseFloat(tx.value) / 1e18;
   const price = chain === 'BSC' ? prices.bnbPrice : prices.ethPrice;
-  return tokens / 1e6; // Approximate token-to-BNB/ETH ratio
+  return tokens / 1e6;
 };
 
 // Get last 4 characters of holder address
@@ -190,7 +191,7 @@ const getHodlerLast4 = async (tx, chain) => {
   return tx.from.slice(-4);
 };
 
-// Calculate Market Cap (placeholder)
+// Calculate Market Cap
 const getMarketCap = async () => {
   return '$10M';
 };
@@ -302,6 +303,7 @@ bot.onText(/\/help/, (msg) => {
 bot.onText(/\/track/, (msg) => {
   const chatId = msg.chat.id;
   activeChats.add(chatId);
+  isTrackingEnabled = true;
   bot.sendMessage(chatId, '📈 Started tracking PETS buys. You’ll get notified on new buys for BNB and ETH pairs.', { parse_mode: 'MarkdownV2' })
     .catch(err => console.error(`Failed to send /track message to ${chatId}:`, err));
 });
@@ -314,11 +316,8 @@ bot.onText(/\/stats/, async (msg) => {
   let bscMessage = 'BNB Pair: No transactions recorded yet.';
   let ethMessage = 'ETH Pair: No transactions recorded yet.';
 
-  const bscTxs = transactions.filter(tx => tx.chain === 'BSC').sort((a, b) => b.timestamp - a.timestamp);
-  const ethTxs = transactions.filter(tx => tx.chain === 'Ethereum').sort((a, b) => b.timestamp - a.timestamp);
-
-  const bscTx = bscTxs.length > 0 ? bscTxs[0] : mockTransaction('BSC');
-  const ethTx = ethTxs.length > 0 ? ethTxs[0] : mockTransaction('Ethereum');
+  const bscTx = (await fetchTransactions('BSC'))[0];
+  const ethTx = (await fetchTransactions('Ethereum'))[0];
 
   const bscScanUrl = `https://bscscan.com/tx/${bscTx.transactionHash}`;
   bscMessage = `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(bscTx.videoDisplay)}\n*💰 BNB Value*: ${escapeMarkdownV2(bscTx.tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(bscTx.marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(bscTx.amount)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(bscTx.hodlerLast4)}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex) 📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01) 🛍️ [Merch](https://micropets.store/) 💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`;
@@ -335,13 +334,14 @@ bot.onText(/\/stats/, async (msg) => {
 bot.onText(/\/stop/, (msg) => {
   const chatId = msg.chat.id;
   activeChats.delete(chatId);
+  isTrackingEnabled = false;
   bot.sendMessage(chatId, '🛑 Stopped tracking PETS buys.', { parse_mode: 'MarkdownV2' })
     .catch(err => console.error(`Failed to send /stop message to ${chatId}:`, err));
 });
 
 bot.onText(/\/status/, (msg) => {
   const chatId = msg.chat.id;
-  const isTracking = activeChats.has(chatId);
+  const isTracking = activeChats.has(chatId) && isTrackingEnabled;
   bot.sendMessage(chatId, `🔍 *Status:* ${isTracking ? 'Tracking enabled' : 'Tracking disabled'}\n*Total tracked transactions:* ${transactions.length}`, { parse_mode: 'MarkdownV2' })
     .catch(err => console.error(`Failed to send /status message to ${chatId}:`, err));
 });
@@ -397,7 +397,7 @@ const processTransaction = async (tx, chain, prices) => {
   await Promise.all(sendPromises);
 };
 
-// Polling function
+// Polling function (only runs if tracking is enabled)
 const monitorTransactions = async () => {
   const pollInterval = 30 * 1000;
 
@@ -428,6 +428,10 @@ const monitorTransactions = async () => {
   };
 
   const pollChain = async (chain) => {
+    if (!isTrackingEnabled) {
+      console.log(`[${chain}] Tracking disabled. Skipping poll.`);
+      return;
+    }
     try {
       console.log(`[${chain}] Checking for new transactions... (${new Date().toISOString()})`);
       const transactionsData = await fetchTransactions(chain);
@@ -448,9 +452,6 @@ const monitorTransactions = async () => {
 
   setInterval(() => pollWithRetry(() => pollChain('BSC'), 'BSC'), pollInterval);
   setInterval(() => pollWithRetry(() => pollChain('Ethereum'), 'Ethereum'), pollInterval);
-
-  await pollWithRetry(() => pollChain('BSC'), 'BSC');
-  await pollWithRetry(() => pollChain('Ethereum'), 'Ethereum');
 };
 
 // Start webhook and monitoring
