@@ -15,10 +15,10 @@ app.use(express.json());
 
 // Environment variables with fallbacks
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
-const BSCSCAN_API_KEY = process.env.INFURA_BSC_URL || 'https://bsc.nownodes.io/97a8bb57-9985-48b3-ad57-8054752cfcb5';
-const ETHERSCAN_API_KEY = process.env.INFURA_ETH_URL || 'https://rpc.ankr.com/eth';
+const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY || 'YOUR_BSCSCAN_API_KEY';
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || 'YOUR_ETHERSCAN_API_KEY';
 const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'da4k3yxhu';
-const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-8mqe0par9-miles-kenneth-napilan-isatus-projects.vercel.app';
+const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-k87i7ndgm-miles-kenneth-napilan-isatus-projects.vercel.app';
 
 // Validate environment variables
 if (!TELEGRAM_BOT_TOKEN || !CLOUDINARY_CLOUD_NAME) {
@@ -34,25 +34,42 @@ if (BSCSCAN_API_KEY === 'YOUR_BSCSCAN_API_KEY' || ETHERSCAN_API_KEY === 'YOUR_ET
 const PETS_BSC_ADDRESS = '0x2466858ab5edad0bb597fe9f008f568b00d25fe3';
 const PETS_BSC_TARGET_ADDRESS = '0x4BDECe4E422fA015336234e4FC4D39ae6dD75b01';
 const PETS_ETH_ADDRESS = '0x2466858ab5edAd0BB597FE9f008F568B00d25Fe3';
-const PETS_ETH_TARGET_ADDRESS = '0x98B794be9C4f49900C6193aAff20876E1F36043e';
+const PETS_ETH_TARGET_ADDRESS = '0x98B794be9C4f49900C6193aAff20876e1f36043e';
 
 // Configure HTTP keep-alive agent
 const httpAgent = new Agent({
-  keepAliveTimeout: 60000,
-  keepAliveMaxTimeout: 120000,
-  connections: 5,
+  keepAliveTimeout: 90000,
+  keepAliveMaxTimeout: 180000,
+  connections: 3,
 });
 
 // In-memory data
 let transactions = [];
 let activeChats = new Set();
 let postedTransactions = new Set();
+let lastFetchTime = { BSC: 0, Ethereum: 0 };
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 // Escape MarkdownV2 characters
 const escapeMarkdownV2 = (text) => {
   const specialChars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
-  return specialChars.reduce((str, char) => str.split(char).join(`\\${char}`), text);
+  return specialChars.reduce((str, char) => str.split(char).join(`\\${char}`), String(text));
 };
+
+// Mock transaction for testing
+const mockTransaction = (chain) => ({
+  chain,
+  to: chain === 'BSC' ? PETS_BSC_TARGET_ADDRESS : PETS_ETH_TARGET_ADDRESS,
+  amount: '5000',
+  category: 'Medium Bullish Buy',
+  video: `https://res.cloudinary.com/${CLOUDINARY_CLOUD_NAME}/video/upload/MEDIUMBUY_MPEG_e02zdz.mp4`,
+  videoDisplay: '[Medium Buy Video]',
+  timestamp: Date.now(),
+  transactionHash: '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(''),
+  tokenValue: chain === 'BSC' ? '$500.00' : '$1000.00',
+  marketCap: '$10M',
+  hodlerLast4: '5678',
+});
 
 // Fetch real-time prices from CoinGecko
 const fetchPrices = async () => {
@@ -77,13 +94,19 @@ const fetchTransactions = async (chain) => {
   const contractAddress = chain === 'BSC' ? PETS_BSC_ADDRESS : PETS_ETH_ADDRESS;
   const targetAddress = chain === 'BSC' ? PETS_BSC_TARGET_ADDRESS : PETS_ETH_TARGET_ADDRESS;
   const url = chain === 'BSC'
-    ? `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&page=1&offset=10&sort=desc&apikey=${apiKey}`
+    ? `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&page=1&offset=5&sort=desc&apikey=${apiKey}`
     : `https://api.etherscan.io/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}`;
+
+  // Check cache
+  if (Date.now() - lastFetchTime[chain] < CACHE_DURATION) {
+    console.log(`[${chain}] Using cached transactions.`);
+    return transactions.filter(tx => tx.chain === chain).slice(0, 5);
+  }
 
   try {
     const response = await pRetry(
       () => axios.get(url, {
-        timeout: 20000,
+        timeout: 30000,
         httpAgent,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
@@ -91,8 +114,9 @@ const fetchTransactions = async (chain) => {
       }),
       {
         retries: 5,
-        minTimeout: 3000,
-        maxTimeout: 10000,
+        minTimeout: 5000,
+        maxTimeout: 20000,
+        factor: 2.5,
         onFailedAttempt: (error) => {
           console.error(`[${chain}] Fetch attempt ${error.attemptNumber} failed: ${error.message}`);
         },
@@ -101,7 +125,8 @@ const fetchTransactions = async (chain) => {
 
     if (response.data.status === '1') {
       console.log(`[${chain}] Successfully fetched ${response.data.result.length} transactions.`);
-      return response.data.result.slice(0, 5); // Process only 5 transactions
+      lastFetchTime[chain] = Date.now();
+      return response.data.result.slice(0, 5);
     } else {
       console.error(`[${chain}] API Error: ${response.data.message} (Result: ${response.data.result})`);
       return [];
@@ -192,7 +217,7 @@ const getHodlerLast4 = async (txHash, chain) => {
 };
 
 // Calculate Market Cap (placeholder)
-const getMarketCap = async (chain) => {
+const getMarketCap = async () => {
   return '$10M';
 };
 
@@ -224,7 +249,7 @@ const getVideoUrl = (category) => {
   return `https://res.cloudinary.com/${CLOUDINARY_CLOUD_NAME}/video/upload/${publicId}.mp4`;
 };
 
-// Initialize Telegram Bot (disable polling for production)
+// Initialize Telegram Bot (webhook only)
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
 
 // Set Telegram webhook
@@ -255,43 +280,43 @@ app.post('/api/bot', (req, res) => {
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   activeChats.add(chatId);
-  bot.sendMessage(chatId, '👋 Welcome to PETS Tracker! Use /track to start receiving buy alerts.')
+  bot.sendMessage(chatId, '👋 Welcome to PETS Tracker! Use /track to start receiving buy alerts.', { parse_mode: 'MarkdownV2' })
     .catch(err => console.error(`Failed to send /start message to ${chatId}:`, err));
 });
 
 bot.onText(/\/track/, (msg) => {
   const chatId = msg.chat.id;
   activeChats.add(chatId);
-  bot.sendMessage(chatId, '📈 Started tracking PETS buys. You’ll get notified on new buys for BNB and ETH pairs.')
+  bot.sendMessage(chatId, '📈 Started tracking PETS buys. You’ll get notified on new buys for BNB and ETH pairs.', { parse_mode: 'MarkdownV2' })
     .catch(err => console.error(`Failed to send /track message to ${chatId}:`, err));
 });
 
 bot.onText(/\/stop/, (msg) => {
   const chatId = msg.chat.id;
   activeChats.delete(chatId);
-  bot.sendMessage(chatId, '🛑 Stopped tracking PETS buys.')
+  bot.sendMessage(chatId, '🛑 Stopped tracking PETS buys.', { parse_mode: 'MarkdownV2' })
     .catch(err => console.error(`Failed to send /stop message to ${chatId}:`, err));
 });
 
 bot.onText(/\/stats/, async (msg) => {
   const chatId = msg.chat?.id;
   if (!chatId) return;
+
   let bscMessage = 'BNB Pair: No transactions recorded yet.';
   let ethMessage = 'ETH Pair: No transactions recorded yet.';
 
   const bscTxs = transactions.filter(tx => tx.chain === 'BSC').sort((a, b) => b.timestamp - a.timestamp);
-  if (bscTxs.length > 0) {
-    const tx = bscTxs[0];
-    const bscScanUrl = `https://bscscan.com/tx/${tx.transactionHash}`;
-    bscMessage = `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(tx.videoDisplay)}\n**💰 BNB Value**: ${escapeMarkdownV2(tx.tokenValue)}\n**📊 Market Cap**: ${escapeMarkdownV2(tx.marketCap)}\n**🧳 Holdings**: ${escapeMarkdownV2(tx.amount)} $PETS\n**👤 Holder**: ...${escapeMarkdownV2(tx.hodlerLast4)}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`;
-  }
-
   const ethTxs = transactions.filter(tx => tx.chain === 'Ethereum').sort((a, b) => b.timestamp - a.timestamp);
-  if (ethTxs.length > 0) {
-    const tx = ethTxs[0];
-    const etherscanUrl = `https://etherscan.io/tx/${tx.transactionHash}`;
-    ethMessage = `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${escapeMarkdownV2(tx.videoDisplay)}\n**💰 ETH Value**: ${escapeMarkdownV2(tx.tokenValue)}\n**📊 Market Cap**: ${escapeMarkdownV2(tx.marketCap)}\n**🧳 Holdings**: ${escapeMarkdownV2(tx.amount)} $PETS\n**👤 Holder**: ...${escapeMarkdownV2(tx.hodlerLast4)}\n[Etherscan](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
-  }
+
+  // Use real or mock transaction
+  const bscTx = bscTxs.length > 0 ? bscTxs[0] : mockTransaction('BSC');
+  const ethTx = ethTxs.length > 0 ? ethTxs[0] : mockTransaction('Ethereum');
+
+  const bscScanUrl = `https://bscscan.com/tx/${bscTx.transactionHash}`;
+  bscMessage = `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(bscTx.videoDisplay)}\n*💰 BNB Value*: ${escapeMarkdownV2(bscTx.tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(bscTx.marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(bscTx.amount)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(bscTx.hodlerLast4)}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex) 📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01) 🛍️ [Merch](https://micropets.store/) 💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`;
+
+  const etherscanUrl = `https://etherscan.io/tx/${ethTx.transactionHash}`;
+  ethMessage = `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${escapeMarkdownV2(ethTx.videoDisplay)}\n*💰 ETH Value*: ${escapeMarkdownV2(ethTx.tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(ethTx.marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(ethTx.amount)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(ethTx.hodlerLast4)}\n[Etherscan](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex) 📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329) 🛍️ [Merch](https://micropets.store/) 💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
 
   const message = `📊 *Latest $PETS Transactions:*\n\n${bscMessage}\n\n${ethMessage}`;
   await bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' })
@@ -313,20 +338,17 @@ bot.onText(/\/status/, (msg) => {
 
 bot.onText(/\/test/, async (msg) => {
   const chatId = msg.chat.id;
-  const categories = ['MicroPets Buy', 'Medium Bullish Buy', 'Whale Buy'];
-  const category = categories[Math.floor(Math.random() * categories.length)];
-  const videoDisplay = categoryVideoDisplays[category] || '[Default Video]';
+  const category = 'Medium Bullish Buy';
+  const videoDisplay = categoryVideoDisplays[category] || '[Medium Buy Video]';
   const videoUrl = getVideoUrl(category);
   const randomTxHash = '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
   const hodlerLast4 = '5678';
-  const tokens = category === 'MicroPets Buy' ? '500' : category === 'Medium Bullish Buy' ? '5000' : '15000';
-  const chain = Math.random() > 0.5 ? 'BSC' : 'Ethereum';
-  const tokenValue = chain === 'BSC' ? '$500.00' : '$1000.00';
+  const tokens = '5000';
+  const chain = 'BSC';
+  const tokenValue = '$500.00';
   const marketCap = '$10M';
-  const scanUrl = chain === 'BSC' ? `https://bscscan.com/tx/${randomTxHash}` : `https://etherscan.io/tx/${randomTxHash}`;
-  const message = chain === 'BSC'
-    ? `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 BNB Value*: ${escapeMarkdownV2(tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`
-    : `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 ETH Value*: ${escapeMarkdownV2(tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
+  const scanUrl = `https://bscscan.com/tx/${randomTxHash}`;
+  const message = `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 BNB Value*: ${escapeMarkdownV2(tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex) 📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01) 🛍️ [Merch](https://micropets.store/) 💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`;
 
   try {
     await bot.sendVideo(chatId, videoUrl, {
@@ -361,7 +383,7 @@ const processTransaction = async (tx, chain, prices) => {
   const category = categorizeBuy(tx.value);
   const videoUrl = getVideoUrl(category);
   const videoDisplay = categoryVideoDisplays[category] || '[Default Video]';
-  const marketCap = await getMarketCap(chain);
+  const marketCap = await getMarketCap();
   const hodlerLast4 = await getHodlerLast4(tx.hash, chain);
   const scanUrl = chain === 'BSC' ? `https://bscscan.com/tx/${tx.hash}` : `https://etherscan.io/tx/${tx.hash}`;
 
@@ -385,8 +407,8 @@ const processTransaction = async (tx, chain, prices) => {
 
   for (const chatId of activeChats) {
     const message = chain === 'BSC'
-      ? `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 BNB Value*: ${escapeMarkdownV2(`$${usdValue}`)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`
-      : `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 ETH Value*: ${escapeMarkdownV2(`$${usdValue}`)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
+      ? `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 BNB Value*: ${escapeMarkdownV2(`$${usdValue}`)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex) 📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01) 🛍️ [Merch](https://micropets.store/) 💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`
+      : `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 ETH Value*: ${escapeMarkdownV2(`$${usdValue}`)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex) 📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329) 🛍️ [Merch](https://micropets.store/) 💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
 
     try {
       await bot.sendVideo(chatId, videoUrl, {
@@ -408,7 +430,7 @@ const processTransaction = async (tx, chain, prices) => {
 
 // Polling function
 const monitorTransactions = async () => {
-  const pollInterval = 180 * 1000; // 180 seconds to reduce API load
+  const pollInterval = 300 * 1000; // 5 minutes
 
   const pollWithRetry = async (fn, chain) => {
     return pRetry(
@@ -422,9 +444,9 @@ const monitorTransactions = async () => {
       },
       {
         retries: 5,
-        minTimeout: 3000,
-        maxTimeout: 15000,
-        factor: 2,
+        minTimeout: 5000,
+        maxTimeout: 30000,
+        factor: 2.5,
         onFailedAttempt: (error) => {
           console.log(`[${chain}] Retry attempt ${error.attemptNumber} failed: ${error.message}`);
         },
