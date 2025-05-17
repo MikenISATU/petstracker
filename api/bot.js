@@ -29,6 +29,10 @@ if (BSCSCAN_API_KEY === 'YOUR_BSCSCAN_API_KEY' || ETHERSCAN_API_KEY === 'YOUR_ET
   console.error('BSCSCAN_API_KEY or ETHERSCAN_API_KEY not set. Please provide valid API keys.');
   process.exit(1);
 }
+if (!VERCEL_URL.startsWith('https://')) {
+  console.error('Invalid VERCEL_URL: Must start with https://');
+  process.exit(1);
+}
 
 // Contract and target addresses (from bnbpets.py and ethpets.py)
 const PETS_BSC_ADDRESS = '0x2466858ab5edad0bb597fe9f008f568b00d25fe3';
@@ -249,18 +253,33 @@ const getVideoUrl = (category) => {
   return `https://res.cloudinary.com/${CLOUDINARY_CLOUD_NAME}/video/upload/${publicId}.mp4`;
 };
 
-// Initialize Telegram Bot (webhook only)
+// Initialize Telegram Bot (polling as fallback)
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
 
-// Set Telegram webhook
+// Set Telegram webhook with retries
 const setWebhook = async () => {
+  const webhookUrl = `${VERCEL_URL}/api/bot`;
   try {
-    const webhookUrl = `${VERCEL_URL}/api/bot`;
-    await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${webhookUrl}`);
+    await pRetry(
+      () => axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${webhookUrl}`, {
+        timeout: 15000,
+        httpAgent,
+      }),
+      {
+        retries: 5,
+        minTimeout: 2000,
+        maxTimeout: 10000,
+        factor: 2,
+        onFailedAttempt: (error) => {
+          console.error(`Webhook setup attempt ${error.attemptNumber} failed: ${error.message}`);
+        },
+      }
+    );
     console.log(`Webhook set successfully: ${webhookUrl}`);
+    return true;
   } catch (error) {
-    console.error('Failed to set webhook:', error.message);
-    process.exit(1);
+    console.error(`Failed to set webhook after retries: ${error.message}`);
+    return false;
   }
 };
 
@@ -485,7 +504,12 @@ const monitorTransactions = async () => {
 // Start webhook and monitoring
 const startBot = async () => {
   try {
-    await setWebhook();
+    const webhookSuccess = await setWebhook();
+    if (!webhookSuccess) {
+      console.warn('Webhook setup failed. Falling back to polling.');
+      bot.polling = true; // Enable polling as fallback
+      await bot.startPolling({ restart: true });
+    }
     await monitorTransactions();
   } catch (err) {
     console.error('Failed to start bot:', err);
