@@ -40,13 +40,19 @@ const PETS_ETH_TARGET_ADDRESS = '0x98B794be9C4f49900C6193aAff20876E1F36043e';
 const httpAgent = new Agent({
   keepAliveTimeout: 60000,
   keepAliveMaxTimeout: 120000,
-  connections: 10,
+  connections: 5,
 });
 
 // In-memory data
 let transactions = [];
 let activeChats = new Set();
 let postedTransactions = new Set();
+
+// Escape MarkdownV2 characters
+const escapeMarkdownV2 = (text) => {
+  const specialChars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+  return specialChars.reduce((str, char) => str.split(char).join(`\\${char}`), text);
+};
 
 // Fetch real-time prices from CoinGecko
 const fetchPrices = async () => {
@@ -71,22 +77,22 @@ const fetchTransactions = async (chain) => {
   const contractAddress = chain === 'BSC' ? PETS_BSC_ADDRESS : PETS_ETH_ADDRESS;
   const targetAddress = chain === 'BSC' ? PETS_BSC_TARGET_ADDRESS : PETS_ETH_TARGET_ADDRESS;
   const url = chain === 'BSC'
-    ? `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&page=1&offset=50&sort=desc&apikey=${apiKey}`
+    ? `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&page=1&offset=10&sort=desc&apikey=${apiKey}`
     : `https://api.etherscan.io/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}`;
 
   try {
     const response = await pRetry(
       () => axios.get(url, {
-        timeout: 15000,
+        timeout: 20000,
         httpAgent,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
         },
       }),
       {
-        retries: 3,
-        minTimeout: 2000,
-        maxTimeout: 8000,
+        retries: 5,
+        minTimeout: 3000,
+        maxTimeout: 10000,
         onFailedAttempt: (error) => {
           console.error(`[${chain}] Fetch attempt ${error.attemptNumber} failed: ${error.message}`);
         },
@@ -95,7 +101,7 @@ const fetchTransactions = async (chain) => {
 
     if (response.data.status === '1') {
       console.log(`[${chain}] Successfully fetched ${response.data.result.length} transactions.`);
-      return response.data.result.slice(0, 20);
+      return response.data.result.slice(0, 5); // Process only 5 transactions
     } else {
       console.error(`[${chain}] API Error: ${response.data.message} (Result: ${response.data.result})`);
       return [];
@@ -218,10 +224,20 @@ const getVideoUrl = (category) => {
   return `https://res.cloudinary.com/${CLOUDINARY_CLOUD_NAME}/video/upload/${publicId}.mp4`;
 };
 
-// Initialize Telegram Bot
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
-console.warn('Polling enabled as fallback. Set webhook for production:');
-console.log(`curl -X GET "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${VERCEL_URL}/api/bot"`);
+// Initialize Telegram Bot (disable polling for production)
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
+
+// Set Telegram webhook
+const setWebhook = async () => {
+  try {
+    const webhookUrl = `${VERCEL_URL}/api/bot`;
+    await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${webhookUrl}`);
+    console.log(`Webhook set successfully: ${webhookUrl}`);
+  } catch (error) {
+    console.error('Failed to set webhook:', error.message);
+    process.exit(1);
+  }
+};
 
 // Telegram webhook route
 app.post('/api/bot', (req, res) => {
@@ -267,31 +283,31 @@ bot.onText(/\/stats/, async (msg) => {
   if (bscTxs.length > 0) {
     const tx = bscTxs[0];
     const bscScanUrl = `https://bscscan.com/tx/${tx.transactionHash}`;
-    bscMessage = `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${tx.videoDisplay}\n**💰 BNB Value**: ${tx.tokenValue}\n**📊 Market Cap**: ${tx.marketCap}\n**🧳 Holdings**: ${tx.amount} $PETS\n**👤 Holder**: ...${tx.hodlerLast4}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`;
+    bscMessage = `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(tx.videoDisplay)}\n**💰 BNB Value**: ${escapeMarkdownV2(tx.tokenValue)}\n**📊 Market Cap**: ${escapeMarkdownV2(tx.marketCap)}\n**🧳 Holdings**: ${escapeMarkdownV2(tx.amount)} $PETS\n**👤 Holder**: ...${escapeMarkdownV2(tx.hodlerLast4)}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`;
   }
 
   const ethTxs = transactions.filter(tx => tx.chain === 'Ethereum').sort((a, b) => b.timestamp - a.timestamp);
   if (ethTxs.length > 0) {
     const tx = ethTxs[0];
     const etherscanUrl = `https://etherscan.io/tx/${tx.transactionHash}`;
-    ethMessage = `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${tx.videoDisplay}\n**💰 ETH Value**: ${tx.tokenValue}\n**📊 Market Cap**: ${tx.marketCap}\n**🧳 Holdings**: ${tx.amount} $PETS\n**👤 Holder**: ...${tx.hodlerLast4}\n[Etherscan](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
+    ethMessage = `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${escapeMarkdownV2(tx.videoDisplay)}\n**💰 ETH Value**: ${escapeMarkdownV2(tx.tokenValue)}\n**📊 Market Cap**: ${escapeMarkdownV2(tx.marketCap)}\n**🧳 Holdings**: ${escapeMarkdownV2(tx.amount)} $PETS\n**👤 Holder**: ...${escapeMarkdownV2(tx.hodlerLast4)}\n[Etherscan](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
   }
 
   const message = `📊 *Latest $PETS Transactions:*\n\n${bscMessage}\n\n${ethMessage}`;
-  await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' })
+  await bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' })
     .catch(err => console.error(`Failed to send /stats message to ${chatId}:`, err));
 });
 
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
-  bot.sendMessage(chatId, '🆘 *Available commands:*\n/start - Start the bot\n/track - Enable buy alerts\n/stop - Disable buy alerts\n/stats - View latest buy from BSC and Ethereum\n/status - Check tracking status\n/test - Show a sample buy template\n/help - Show this message', { parse_mode: 'Markdown' })
+  bot.sendMessage(chatId, '🆘 *Available commands:*\n/start - Start the bot\n/track - Enable buy alerts\n/stop - Disable buy alerts\n/stats - View latest buy from BSC and Ethereum\n/status - Check tracking status\n/test - Show a sample buy template\n/help - Show this message', { parse_mode: 'MarkdownV2' })
     .catch(err => console.error(`Failed to send /help message to ${chatId}:`, err));
 });
 
 bot.onText(/\/status/, (msg) => {
   const chatId = msg.chat.id;
   const isTracking = activeChats.has(chatId);
-  bot.sendMessage(chatId, `🔍 *Status:* ${isTracking ? 'Tracking enabled' : 'Tracking disabled'}\n*Total tracked transactions:* ${transactions.length}`, { parse_mode: 'Markdown' })
+  bot.sendMessage(chatId, `🔍 *Status:* ${isTracking ? 'Tracking enabled' : 'Tracking disabled'}\n*Total tracked transactions:* ${transactions.length}`, { parse_mode: 'MarkdownV2' })
     .catch(err => console.error(`Failed to send /status message to ${chatId}:`, err));
 });
 
@@ -302,7 +318,6 @@ bot.onText(/\/test/, async (msg) => {
   const videoDisplay = categoryVideoDisplays[category] || '[Default Video]';
   const videoUrl = getVideoUrl(category);
   const randomTxHash = '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
-  const toAddress = '0x1234567890abcdef1234567890abcdef12345678';
   const hodlerLast4 = '5678';
   const tokens = category === 'MicroPets Buy' ? '500' : category === 'Medium Bullish Buy' ? '5000' : '15000';
   const chain = Math.random() > 0.5 ? 'BSC' : 'Ethereum';
@@ -310,20 +325,23 @@ bot.onText(/\/test/, async (msg) => {
   const marketCap = '$10M';
   const scanUrl = chain === 'BSC' ? `https://bscscan.com/tx/${randomTxHash}` : `https://etherscan.io/tx/${randomTxHash}`;
   const message = chain === 'BSC'
-    ? `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${videoDisplay}\n**💰 BNB Value**: ${tokenValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder**: ...${hodlerLast4}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`
-    : `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${videoDisplay}\n**💰 ETH Value**: ${tokenValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder**: ...${hodlerLast4}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
+    ? `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 BNB Value*: ${escapeMarkdownV2(tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`
+    : `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 ETH Value*: ${escapeMarkdownV2(tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
 
   try {
     await bot.sendVideo(chatId, videoUrl, {
       caption: message,
-      parse_mode: 'Markdown',
+      parse_mode: 'MarkdownV2',
     });
     console.log(`Successfully sent /test video to chat ${chatId}`);
   } catch (err) {
     console.error(`Failed to send /test video to chat ${chatId}:`, err.message);
-    await bot.sendMessage(chatId, `${message}\n\n⚠️ Video unavailable, please check bot configuration.`, {
-      parse_mode: 'Markdown',
-    });
+    try {
+      await bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' });
+      console.log(`Successfully sent /test message to chat ${chatId}`);
+    } catch (msgErr) {
+      console.error(`Failed to send /test message to chat ${chatId}:`, msgErr.message);
+    }
   }
 });
 
@@ -367,27 +385,30 @@ const processTransaction = async (tx, chain, prices) => {
 
   for (const chatId of activeChats) {
     const message = chain === 'BSC'
-      ? `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${videoDisplay}\n**💰 BNB Value**: $${usdValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder**: ...${hodlerLast4}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`
-      : `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${videoDisplay}\n**💰 ETH Value**: $${usdValue}\n**📊 Market Cap**: ${marketCap}\n**🧳 Holdings**: ${tokens} $PETS\n**👤 Holder**: ...${hodlerLast4}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
+      ? `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 BNB Value*: ${escapeMarkdownV2(`$${usdValue}`)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[BscScan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`
+      : `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${escapeMarkdownV2(videoDisplay)}\n*💰 ETH Value*: ${escapeMarkdownV2(`$${usdValue}`)}\n*📊 Market Cap*: ${escapeMarkdownV2(marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(tokens)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(hodlerLast4)}\n[Etherscan](${scanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex)  📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329)  🛍️ [Merch](https://micropets.store/)  💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
 
     try {
       await bot.sendVideo(chatId, videoUrl, {
         caption: message,
-        parse_mode: 'Markdown',
+        parse_mode: 'MarkdownV2',
       });
       console.log(`Successfully sent ${chain} video to chat ${chatId}`);
     } catch (err) {
       console.error(`Failed to send ${chain} video to chat ${chatId}:`, err.message);
-      await bot.sendMessage(chatId, `${message}\n\n⚠️ Video unavailable, please check bot configuration.`, {
-        parse_mode: 'Markdown',
-      });
+      try {
+        await bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' });
+        console.log(`Successfully sent ${chain} message to chat ${chatId}`);
+      } catch (msgErr) {
+        console.error(`Failed to send ${chain} message to chat ${chatId}:`, msgErr.message);
+      }
     }
   }
 };
 
 // Polling function
 const monitorTransactions = async () => {
-  const pollInterval = 120 * 1000; // Increased to 120s to reduce rate limit issues
+  const pollInterval = 180 * 1000; // 180 seconds to reduce API load
 
   const pollWithRetry = async (fn, chain) => {
     return pRetry(
@@ -401,8 +422,8 @@ const monitorTransactions = async () => {
       },
       {
         retries: 5,
-        minTimeout: 2000,
-        maxTimeout: 16000,
+        minTimeout: 3000,
+        maxTimeout: 15000,
         factor: 2,
         onFailedAttempt: (error) => {
           console.log(`[${chain}] Retry attempt ${error.attemptNumber} failed: ${error.message}`);
@@ -439,13 +460,17 @@ const monitorTransactions = async () => {
   await pollWithRetry(() => pollChain('Ethereum'), 'Ethereum').catch(err => console.error('Initial Ethereum poll failed:', err));
 };
 
-// Start monitoring
-try {
-  monitorTransactions();
-} catch (err) {
-  console.error('Failed to start transaction monitoring:', err);
-  process.exit(1);
-}
+// Start webhook and monitoring
+const startBot = async () => {
+  try {
+    await setWebhook();
+    await monitorTransactions();
+  } catch (err) {
+    console.error('Failed to start bot:', err);
+    process.exit(1);
+  }
+};
+startBot();
 
 // API route for frontend
 app.get('/api/transactions', (req, res) => {
