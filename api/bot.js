@@ -15,8 +15,8 @@ app.use(express.json());
 
 // Environment variables with fallbacks
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
-const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY || 'YOUR_BSCSCAN_API_KEY';
-const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || 'YOUR_ETHERSCAN_API_KEY';
+const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY || 'https://bsc.nownodes.io/97a8bb57-9985-48b3-ad57-8054752cfcb5';
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || 'https://rpc.ankr.com/eth';
 const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'da4k3yxhu';
 const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-k87i7ndgm-miles-kenneth-napilan-isatus-projects.vercel.app';
 
@@ -25,7 +25,7 @@ if (!TELEGRAM_BOT_TOKEN || !CLOUDINARY_CLOUD_NAME) {
   console.error('Missing critical environment variables: TELEGRAM_BOT_TOKEN or CLOUDINARY_CLOUD_NAME.');
   process.exit(1);
 }
-if (BSCSCAN_API_KEY === 'YOUR_BSCSCAN_API_KEY' || ETHERSCAN_API_KEY === 'YOUR_ETHERSCAN_API_KEY') {
+if (BSCSCAN_API_KEY === 'https://bsc.nownodes.io/97a8bb57-9985-48b3-ad57-8054752cfcb5' || ETHERSCAN_API_KEY === 'https://rpc.ankr.com/eth') {
   console.error('BSCSCAN_API_KEY or ETHERSCAN_API_KEY not set. Please provide valid API keys.');
   process.exit(1);
 }
