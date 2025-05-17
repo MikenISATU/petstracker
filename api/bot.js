@@ -18,7 +18,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgw
 const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY || '';
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || '';
 const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'da4k3yxhu';
-const DEFAULT_VERCEL_URL = 'https://petstracker-8mqe0par9-miles-kenneth-napilan-isatus-projects.vercel.app';
+const DEFAULT_VERCEL_URL = 'https://petstracker-2g126w6li-miles-kenneth-napilan-isatus-projects.vercel.app';
 const VERCEL_URL = (process.env.VERCEL_URL || DEFAULT_VERCEL_URL).startsWith('https://')
   ? process.env.VERCEL_URL || DEFAULT_VERCEL_URL
   : `https://${process.env.VERCEL_URL || DEFAULT_VERCEL_URL}`;
@@ -226,15 +226,15 @@ const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
 const setWebhook = async () => {
   const webhookUrl = `${VERCEL_URL}/api/bot`;
   try {
-    await pRetry(
+    const response = await pRetry(
       () => axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${webhookUrl}`, {
-        timeout: 15000,
+        timeout: 30000, // Increased timeout
         httpAgent,
       }),
       {
-        retries: 3,
-        minTimeout: 1000,
-        maxTimeout: 5000,
+        retries: 5, // Increased retries
+        minTimeout: 2000,
+        maxTimeout: 10000,
         factor: 2,
         onFailedAttempt: (error) => {
           console.error(`Webhook setup attempt ${error.attemptNumber} failed: ${error.message}`);
@@ -242,6 +242,7 @@ const setWebhook = async () => {
       }
     );
     console.log(`Webhook set successfully: ${webhookUrl}`);
+    console.log('Webhook response:', response.data);
     return true;
   } catch (error) {
     console.error(`Failed to set webhook after retries: ${error.message}`);
@@ -458,12 +459,19 @@ const startBot = async () => {
       console.warn('Webhook setup failed. Falling back to polling.');
       bot.polling = true;
       await bot.startPolling({ restart: true });
+      console.log('Polling started successfully.');
     }
     await monitorTransactions();
   } catch (err) {
     console.error('Failed to start bot:', err);
     bot.polling = true;
-    await bot.startPolling({ restart: true });
+    try {
+      await bot.startPolling({ restart: true });
+      console.log('Polling started successfully after error.');
+    } catch (pollErr) {
+      console.error('Failed to start polling:', pollErr);
+      process.exit(1);
+    }
   }
 };
 startBot();
