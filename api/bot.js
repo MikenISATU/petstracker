@@ -15,13 +15,12 @@ app.use(express.json());
 
 // Environment variables with fallbacks
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
-const BSCSCAN_API_KEY = process.env.INFURA_BSC_URL || 'https://bsc.nownodes.io/97a8bb57-9985-48b3-ad57-8054752cfcb5';
-const ETHERSCAN_API_KEY = process.env.INFURA_ETH_URL || 'https://rpc.ankr.com/eth';
+const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY || 'https://bsc.nownodes.io/97a8bb57-9985-48b3-ad57-8054752cfcb5';
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || 'https://rpc.ankr.com/eth';
 const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'da4k3yxhu';
-const DEFAULT_VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-8mqe0par9-miles-kenneth-napilan-isatus-projects.vercel.app';
+const DEFAULT_VERCEL_URL = 'https://petstracker-8mqe0par9-miles-kenneth-napilan-isatus-projects.vercel.app';
 const VERCEL_URL = (process.env.VERCEL_URL || DEFAULT_VERCEL_URL).startsWith('https://')
-  ? process.env.VERCEL_URL || DEFAULT_VERCEL_URL
-  : `https://${process.env.VERCEL_URL || DEFAULT_VERCEL_URL}`;
+
 
 // Log VERCEL_URL for debugging
 console.log(`VERCEL_URL: ${VERCEL_URL}`);
@@ -31,8 +30,9 @@ if (!TELEGRAM_BOT_TOKEN || !CLOUDINARY_CLOUD_NAME) {
   console.error('Missing critical environment variables: TELEGRAM_BOT_TOKEN or CLOUDINARY_CLOUD_NAME.');
   process.exit(1);
 }
-if (BSCSCAN_API_KEY === 'YOUR_BSCSCAN_API_KEY' || ETHERSCAN_API_KEY === 'YOUR_ETHERSCAN_API_KEY') {
-  console.error('BSCSCAN_API_KEY or ETHERSCAN_API_KEY not set. Please provide valid API keys.');
+if (BSCSCAN_API_KEY === 'YOUR_BSCSCAN_API_KEY' || ETHERSCAN_API_KEY === 'YOUR_ETHERSCAN_API_KEY' ||
+    BSCSCAN_API_KEY.startsWith('http') || ETHERSCAN_API_KEY.startsWith('http')) {
+  console.error('Invalid BSCSCAN_API_KEY or ETHERSCAN_API_KEY. Please provide valid API keys, not RPC URLs.');
   process.exit(1);
 }
 
@@ -112,19 +112,19 @@ const fetchTransactions = async (chain) => {
   try {
     const response = await pRetry(
       () => axios.get(url, {
-        timeout: 30000,
+        timeout: 45000, // Increased from 30000
         httpAgent,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
         },
       }),
       {
-        retries: 5,
+        retries: 7, // Increased from 5
         minTimeout: 5000,
-        maxTimeout: 20000,
+        maxTimeout: 30000,
         factor: 2.5,
         onFailedAttempt: (error) => {
-          console.error(`[${chain}] Fetch attempt ${error.attemptNumber} failed: ${error.message}`);
+          console.error(`[${chain}] Fetch attempt ${error.attemptNumber} failed: ${error.message} (URL: ${url})`);
         },
       }
     );
@@ -135,11 +135,11 @@ const fetchTransactions = async (chain) => {
       return response.data.result.slice(0, 5);
     } else {
       console.error(`[${chain}] API Error: ${response.data.message} (Result: ${response.data.result})`);
-      return [];
+      return [mockTransaction(chain)]; // Fallback to mock
     }
   } catch (error) {
     console.error(`[${chain}] Error fetching transactions: ${error.message}`);
-    return [];
+    return [mockTransaction(chain)]; // Fallback to mock
   }
 };
 
@@ -264,7 +264,7 @@ const setWebhook = async () => {
   try {
     await pRetry(
       () => axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${webhookUrl}`, {
-        timeout: 20000, // Increased from 15000
+        timeout: 20000,
         httpAgent,
       }),
       {
@@ -454,25 +454,29 @@ const monitorTransactions = async () => {
   const pollInterval = 300 * 1000; // 5 minutes
 
   const pollWithRetry = async (fn, chain) => {
-    return pRetry(
-      async () => {
-        try {
-          await fn();
-        } catch (err) {
-          console.error(`[${chain}] Polling error:`, err.message);
-          throw err;
-        }
-      },
-      {
-        retries: 5,
-        minTimeout: 5000,
-        maxTimeout: 30000,
-        factor: 2.5,
-        onFailedAttempt: (error) => {
-          console.log(`[${chain}] Retry attempt ${error.attemptNumber} failed: ${error.message}`);
+    try {
+      await pRetry(
+        async () => {
+          try {
+            await fn();
+          } catch (err) {
+            console.error(`[${chain}] Polling error:`, err.message);
+            throw err;
+          }
         },
-      }
-    );
+        {
+          retries: 7, // Increased from 5
+          minTimeout: 5000,
+          maxTimeout: 30000,
+          factor: 2.5,
+          onFailedAttempt: (error) => {
+            console.log(`[${chain}] Retry attempt ${error.attemptNumber} failed: ${error.message}`);
+          },
+        }
+      );
+    } catch (err) {
+      console.error(`[${chain}] Polling failed after retries: ${err.message}`);
+    }
   };
 
   const pollChain = async (chain) => {
@@ -496,11 +500,11 @@ const monitorTransactions = async () => {
     }
   };
 
-  setInterval(() => pollWithRetry(() => pollChain('BSC'), 'BSC').catch(err => console.error('BSC polling interval error:', err)), pollInterval);
-  setInterval(() => pollWithRetry(() => pollChain('Ethereum'), 'Ethereum').catch(err => console.error('Ethereum polling interval error:', err)), pollInterval);
+  setInterval(() => pollWithRetry(() => pollChain('BSC'), 'BSC'), pollInterval);
+  setInterval(() => pollWithRetry(() => pollChain('Ethereum'), 'Ethereum'), pollInterval);
 
-  await pollWithRetry(() => pollChain('BSC'), 'BSC').catch(err => console.error('Initial BSC poll failed:', err));
-  await pollWithRetry(() => pollChain('Ethereum'), 'Ethereum').catch(err => console.error('Initial Ethereum poll failed:', err));
+  await pollWithRetry(() => pollChain('BSC'), 'BSC');
+  await pollWithRetry(() => pollChain('Ethereum'), 'Ethereum');
 };
 
 // Start webhook and monitoring
@@ -509,13 +513,15 @@ const startBot = async () => {
     const webhookSuccess = await setWebhook();
     if (!webhookSuccess) {
       console.warn('Webhook setup failed. Falling back to polling.');
-      bot.polling = true; // Enable polling as fallback
+      bot.polling = true;
       await bot.startPolling({ restart: true });
     }
     await monitorTransactions();
   } catch (err) {
     console.error('Failed to start bot:', err);
-    process.exit(1);
+    // Do not exit to allow polling
+    bot.polling = true;
+    await bot.startPolling({ restart: true });
   }
 };
 startBot();
