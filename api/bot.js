@@ -1,7 +1,6 @@
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import axios from 'axios';
-import { load } from 'cheerio';
 import pRetry from 'p-retry';
 import { Agent } from 'undici';
 import dotenv from 'dotenv';
@@ -89,7 +88,7 @@ const mockTransaction = (chain) => ({
   marketCap: '$10M',
   hodlerLast4: '5678',
   hash: '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(''),
-  value: '5000' + '0'.repeat(18), // Simulate 5000 tokens
+  value: '5000' + '0'.repeat(18),
   from: chain === 'BSC' ? PETS_BSC_TARGET_ADDRESS : PETS_ETH_TARGET_ADDRESS,
 });
 
@@ -132,7 +131,6 @@ const fetchTransactions = async (chain) => {
     ? `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&page=1&offset=5&sort=desc&apikey=${apiKey}`
     : `https://api.etherscan.io/api?module=account&action=tokentx&contractaddress=${contractAddress}&address=${targetAddress}&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}`;
 
-  // Check cache
   if (Date.now() - lastFetchTime[chain] < CACHE_DURATION) {
     console.log(`[${chain}] Using cached transactions.`);
     return transactions.filter(tx => tx.chain === chain).slice(0, 5);
@@ -174,21 +172,19 @@ const fetchTransactions = async (chain) => {
 
 // Check if transaction is a DEX trade (simplified)
 const isDexTrade = async (txHash, chain) => {
-  if (useMockData) return true; // Mock transactions are considered DEX trades
-  // Assume tokentx API results are DEX trades to skip scraping
-  return true;
+  if (useMockData) return true;
+  return true; // Assume tokentx API results are DEX trades
 };
 
-// Extract BNB/ETH value (use API data or mock)
+// Extract BNB/ETH value
 const extractTokenValue = async (tx, chain, prices) => {
-  if (useMockData) return 1.0; // Mock value for 5000 tokens
-  // Estimate value using token amount and current price
+  if (useMockData) return 1.0;
   const tokens = parseFloat(tx.value) / 1e18;
   const price = chain === 'BSC' ? prices.bnbPrice : prices.ethPrice;
   return tokens / 1e6; // Approximate token-to-BNB/ETH ratio
 };
 
-// Get last 4 characters of holder address (from tx.from)
+// Get last 4 characters of holder address
 const getHodlerLast4 = async (tx, chain) => {
   if (useMockData) return '5678';
   return tx.from.slice(-4);
@@ -219,7 +215,7 @@ const getVideoUrl = (category) => {
   return VIDEO_CACHE[category] || VIDEO_CACHE['Medium Bullish Buy'];
 };
 
-// Initialize Telegram Bot (polling as fallback)
+// Initialize Telegram Bot
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
 
 // Set Telegram webhook with retries
@@ -228,11 +224,11 @@ const setWebhook = async () => {
   try {
     const response = await pRetry(
       () => axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${webhookUrl}`, {
-        timeout: 30000, // Increased timeout
+        timeout: 30000,
         httpAgent,
       }),
       {
-        retries: 5, // Increased retries
+        retries: 5,
         minTimeout: 2000,
         maxTimeout: 10000,
         factor: 2,
@@ -262,7 +258,9 @@ app.post('/api/bot', (req, res) => {
   }
 });
 
-// Telegram commands
+// Telegram commands in specified order
+
+// 1. /start
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   activeChats.add(chatId);
@@ -270,58 +268,7 @@ bot.onText(/\/start/, (msg) => {
     .catch(err => console.error(`Failed to send /start message to ${chatId}:`, err));
 });
 
-bot.onText(/\/track/, (msg) => {
-  const chatId = msg.chat.id;
-  activeChats.add(chatId);
-  bot.sendMessage(chatId, '📈 Started tracking PETS buys. You’ll get notified on new buys for BNB and ETH pairs.', { parse_mode: 'MarkdownV2' })
-    .catch(err => console.error(`Failed to send /track message to ${chatId}:`, err));
-});
-
-bot.onText(/\/stop/, (msg) => {
-  const chatId = msg.chat.id;
-  activeChats.delete(chatId);
-  bot.sendMessage(chatId, '🛑 Stopped tracking PETS buys.', { parse_mode: 'MarkdownV2' })
-    .catch(err => console.error(`Failed to send /stop message to ${chatId}:`, err));
-});
-
-bot.onText(/\/stats/, async (msg) => {
-  const chatId = msg.chat?.id;
-  if (!chatId) return;
-
-  let bscMessage = 'BNB Pair: No transactions recorded yet.';
-  let ethMessage = 'ETH Pair: No transactions recorded yet.';
-
-  const bscTxs = transactions.filter(tx => tx.chain === 'BSC').sort((a, b) => b.timestamp - a.timestamp);
-  const ethTxs = transactions.filter(tx => tx.chain === 'Ethereum').sort((a, b) => b.timestamp - a.timestamp);
-
-  // Use real or mock transaction
-  const bscTx = bscTxs.length > 0 ? bscTxs[0] : mockTransaction('BSC');
-  const ethTx = ethTxs.length > 0 ? ethTxs[0] : mockTransaction('Ethereum');
-
-  const bscScanUrl = `https://bscscan.com/tx/${bscTx.transactionHash}`;
-  bscMessage = `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(bscTx.videoDisplay)}\n*💰 BNB Value*: ${escapeMarkdownV2(bscTx.tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(bscTx.marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(bscTx.amount)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(bscTx.hodlerLast4)}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex) 📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01) 🛍️ [Merch](https://micropets.store/) 💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`;
-
-  const etherscanUrl = `https://etherscan.io/tx/${ethTx.transactionHash}`;
-  ethMessage = `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${escapeMarkdownV2(ethTx.videoDisplay)}\n*💰 ETH Value*: ${escapeMarkdownV2(ethTx.tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(ethTx.marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(ethTx.amount)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(ethTx.hodlerLast4)}\n[Etherscan](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex) 📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329) 🛍️ [Merch](https://micropets.store/) 💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
-
-  const message = `📊 *Latest $PETS Transactions:*\n\n${bscMessage}\n\n${ethMessage}`;
-  await bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' })
-    .catch(err => console.error(`Failed to send /stats message to ${chatId}:`, err));
-});
-
-bot.onText(/\/help/, (msg) => {
-  const chatId = msg.chat.id;
-  bot.sendMessage(chatId, '🆘 *Available commands:*\n/start - Start the bot\n/track - Enable buy alerts\n/stop - Disable buy alerts\n/stats - View latest buy from BSC and Ethereum\n/status - Check tracking status\n/test - Show a sample buy template\n/help - Show this message', { parse_mode: 'MarkdownV2' })
-    .catch(err => console.error(`Failed to send /help message to ${chatId}:`, err));
-});
-
-bot.onText(/\/status/, (msg) => {
-  const chatId = msg.chat.id;
-  const isTracking = activeChats.has(chatId);
-  bot.sendMessage(chatId, `🔍 *Status:* ${isTracking ? 'Tracking enabled' : 'Tracking disabled'}\n*Total tracked transactions:* ${transactions.length}`, { parse_mode: 'MarkdownV2' })
-    .catch(err => console.error(`Failed to send /status message to ${chatId}:`, err));
-});
-
+// 2. /test
 bot.onText(/\/test/, async (msg) => {
   const chatId = msg.chat.id;
   const category = 'Medium Bullish Buy';
@@ -342,6 +289,61 @@ bot.onText(/\/test/, async (msg) => {
   } catch (err) {
     console.error(`Failed to send /test message to chat ${chatId}:`, err.message);
   }
+});
+
+// 3. /help
+bot.onText(/\/help/, (msg) => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(chatId, '🆘 *Available commands:*\n/start - Start the bot\n/test - Show a sample buy template\n/help - Show this message\n/track - Enable buy alerts\n/stats - View latest buy from BSC and Ethereum\n/stop - Disable buy alerts\n/status - Check tracking status', { parse_mode: 'MarkdownV2' })
+    .catch(err => console.error(`Failed to send /help message to ${chatId}:`, err));
+});
+
+// 4. /track
+bot.onText(/\/track/, (msg) => {
+  const chatId = msg.chat.id;
+  activeChats.add(chatId);
+  bot.sendMessage(chatId, '📈 Started tracking PETS buys. You’ll get notified on new buys for BNB and ETH pairs.', { parse_mode: 'MarkdownV2' })
+    .catch(err => console.error(`Failed to send /track message to ${chatId}:`, err));
+});
+
+// 5. /stats
+bot.onText(/\/stats/, async (msg) => {
+  const chatId = msg.chat?.id;
+  if (!chatId) return;
+
+  let bscMessage = 'BNB Pair: No transactions recorded yet.';
+  let ethMessage = 'ETH Pair: No transactions recorded yet.';
+
+  const bscTxs = transactions.filter(tx => tx.chain === 'BSC').sort((a, b) => b.timestamp - a.timestamp);
+  const ethTxs = transactions.filter(tx => tx.chain === 'Ethereum').sort((a, b) => b.timestamp - a.timestamp);
+
+  const bscTx = bscTxs.length > 0 ? bscTxs[0] : mockTransaction('BSC');
+  const ethTx = ethTxs.length > 0 ? ethTxs[0] : mockTransaction('Ethereum');
+
+  const bscScanUrl = `https://bscscan.com/tx/${bscTx.transactionHash}`;
+  bscMessage = `@MicroPetsBuy_bot\nMicroPets Buy - BNB Pair\n${escapeMarkdownV2(bscTx.videoDisplay)}\n*💰 BNB Value*: ${escapeMarkdownV2(bscTx.tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(bscTx.marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(bscTx.amount)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(bscTx.hodlerLast4)}\n[BscScan](${bscScanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex) 📊 [Chart](https://www.dextools.io/app/en/bnb/pair-explorer/0x4bdece4e422fa015336234e4fc4d39ae6dd75b01) 🛍️ [Merch](https://micropets.store/) 💰 [Buy $PETS](https://pancakeswap.finance/swap?outputCurrency=${PETS_BSC_ADDRESS})`;
+
+  const etherscanUrl = `https://etherscan.io/tx/${ethTx.transactionHash}`;
+  ethMessage = `@MicroPetsBuy_bot\nMicroPets Buy - ETH Pair\n${escapeMarkdownV2(ethTx.videoDisplay)}\n*💰 ETH Value*: ${escapeMarkdownV2(ethTx.tokenValue)}\n*📊 Market Cap*: ${escapeMarkdownV2(ethTx.marketCap)}\n*🧳 Holdings*: ${escapeMarkdownV2(ethTx.amount)} $PETS\n*👤 Holder*: ...${escapeMarkdownV2(ethTx.hodlerLast4)}\n[Etherscan](${etherscanUrl})\n\n📍 [Staking](https://pets.micropets.io/petdex) 📊 [Chart](https://www.dextools.io/app/en/ether/pair-explorer/0x98b794be9c4f49900c6193aaff20876e1f36043e?t=1726815772329) 🛍️ [Merch](https://micropets.store/) 💰 [Buy $PETS](https://app.uniswap.org/swap?chain=mainnet&inputCurrency=NATIVE&outputCurrency=${PETS_ETH_ADDRESS})`;
+
+  const message = `📊 *Latest $PETS Transactions:*\n\n${bscMessage}\n\n${ethMessage}`;
+  await bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' })
+    .catch(err => console.error(`Failed to send /stats message to ${chatId}:`, err));
+});
+
+// Additional commands
+bot.onText(/\/stop/, (msg) => {
+  const chatId = msg.chat.id;
+  activeChats.delete(chatId);
+  bot.sendMessage(chatId, '🛑 Stopped tracking PETS buys.', { parse_mode: 'MarkdownV2' })
+    .catch(err => console.error(`Failed to send /stop message to ${chatId}:`, err));
+});
+
+bot.onText(/\/status/, (msg) => {
+  const chatId = msg.chat.id;
+  const isTracking = activeChats.has(chatId);
+  bot.sendMessage(chatId, `🔍 *Status:* ${isTracking ? 'Tracking enabled' : 'Tracking disabled'}\n*Total tracked transactions:* ${transactions.length}`, { parse_mode: 'MarkdownV2' })
+    .catch(err => console.error(`Failed to send /status message to ${chatId}:`, err));
 });
 
 // Process transaction
@@ -397,7 +399,7 @@ const processTransaction = async (tx, chain, prices) => {
 
 // Polling function
 const monitorTransactions = async () => {
-  const pollInterval = 30 * 1000; // 30 seconds
+  const pollInterval = 30 * 1000;
 
   const pollWithRetry = async (fn, chain) => {
     try {
