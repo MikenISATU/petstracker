@@ -1,4 +1,3 @@
-import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import axios from 'axios';
 import pRetry from 'p-retry';
@@ -8,26 +7,11 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
-// Initialize Express app
-const app = express();
-app.use(express.json());
-
 // Environment variables with fallbacks
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgwO4jMaZVkZsCPxrUN9X_GE2emq73Y';
 const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY || '';
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || '';
 const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'da4k3yxhu';
-const DEFAULT_VERCEL_URL = 'https://petstracker-2g126w6li-miles-kenneth-napilan-isatus-projects.vercel.app';
-const VERCEL_URL = (process.env.VERCEL_URL || DEFAULT_VERCEL_URL).startsWith('https://')
-  ? process.env.VERCEL_URL || DEFAULT_VERCEL_URL
-  : `https://${process.env.VERCEL_URL || DEFAULT_VERCEL_URL}`;
-
-// Log environment variables for debugging
-console.log(`VERCEL_URL: ${VERCEL_URL}`);
-console.log(`TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN ? 'Set' : 'Not set'}`);
-console.log(`BSCSCAN_API_KEY: ${BSCSCAN_API_KEY ? 'Set' : 'Not set'}`);
-console.log(`ETHERSCAN_API_KEY: ${ETHERSCAN_API_KEY ? 'Set' : 'Not set'}`);
-console.log(`CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}`);
 
 // Validate environment variables
 let useMockData = false;
@@ -216,48 +200,8 @@ const getVideoUrl = (category) => {
   return VIDEO_CACHE[category] || VIDEO_CACHE['Medium Bullish Buy'];
 };
 
-// Initialize Telegram Bot
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
-
-// Set Telegram webhook with retries
-const setWebhook = async () => {
-  const webhookUrl = `${VERCEL_URL}/api/bot`;
-  try {
-    const response = await pRetry(
-      () => axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${webhookUrl}`, {
-        timeout: 30000,
-        httpAgent,
-      }),
-      {
-        retries: 5,
-        minTimeout: 2000,
-        maxTimeout: 10000,
-        factor: 2,
-        onFailedAttempt: (error) => {
-          console.error(`Webhook setup attempt ${error.attemptNumber} failed: ${error.message}`);
-        },
-      }
-    );
-    console.log(`Webhook set successfully: ${webhookUrl}`);
-    console.log('Webhook response:', response.data);
-    return true;
-  } catch (error) {
-    console.error(`Failed to set webhook after retries: ${error.message}`);
-    return false;
-  }
-};
-
-// Telegram webhook route
-app.post('/api/bot', (req, res) => {
-  try {
-    console.log('Received Telegram update:', JSON.stringify(req.body));
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
-  } catch (err) {
-    console.error('Error processing Telegram update:', err);
-    res.sendStatus(500);
-  }
-});
+// Initialize Telegram Bot with long polling
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 
 // Telegram commands in specified order
 
@@ -454,38 +398,16 @@ const monitorTransactions = async () => {
   setInterval(() => pollWithRetry(() => pollChain('Ethereum'), 'Ethereum'), pollInterval);
 };
 
-// Start webhook and monitoring
+// Start bot and monitoring
 const startBot = async () => {
   try {
-    const webhookSuccess = await setWebhook();
-    if (!webhookSuccess) {
-      console.warn('Webhook setup failed. Falling back to polling.');
-      bot.polling = true;
-      await bot.startPolling({ restart: true });
-      console.log('Polling started successfully.');
-    }
+    console.log('Starting bot with long polling...');
+    await bot.startPolling({ restart: true });
+    console.log('Bot polling started successfully.');
     await monitorTransactions();
   } catch (err) {
-    console.error('Failed to start bot:', err);
-    bot.polling = true;
-    try {
-      await bot.startPolling({ restart: true });
-      console.log('Polling started successfully after error.');
-    } catch (pollErr) {
-      console.error('Failed to start polling:', pollErr);
-      process.exit(1);
-    }
+    console.error('Failed to start bot polling:', err);
+    process.exit(1);
   }
 };
 startBot();
-
-// API route for frontend
-app.get('/api/transactions', (req, res) => {
-  res.json(transactions.map(tx => ({
-    ...tx,
-    video: tx.video,
-  })));
-});
-
-// Export for serverless handler
-export default app;
