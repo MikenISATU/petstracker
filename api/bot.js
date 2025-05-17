@@ -18,7 +18,13 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7347310243:AAGYxgw
 const BSCSCAN_API_KEY = process.env.INFURA_BSC_URL || 'https://bsc.nownodes.io/97a8bb57-9985-48b3-ad57-8054752cfcb5';
 const ETHERSCAN_API_KEY = process.env.INFURA_ETH_URL || 'https://rpc.ankr.com/eth';
 const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'da4k3yxhu';
-const VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-8mqe0par9-miles-kenneth-napilan-isatus-projects.vercel.app';
+const DEFAULT_VERCEL_URL = process.env.VERCEL_URL || 'https://petstracker-8mqe0par9-miles-kenneth-napilan-isatus-projects.vercel.app';
+const VERCEL_URL = (process.env.VERCEL_URL || DEFAULT_VERCEL_URL).startsWith('https://')
+  ? process.env.VERCEL_URL || DEFAULT_VERCEL_URL
+  : `https://${process.env.VERCEL_URL || DEFAULT_VERCEL_URL}`;
+
+// Log VERCEL_URL for debugging
+console.log(`VERCEL_URL: ${VERCEL_URL}`);
 
 // Validate environment variables
 if (!TELEGRAM_BOT_TOKEN || !CLOUDINARY_CLOUD_NAME) {
@@ -27,10 +33,6 @@ if (!TELEGRAM_BOT_TOKEN || !CLOUDINARY_CLOUD_NAME) {
 }
 if (BSCSCAN_API_KEY === 'YOUR_BSCSCAN_API_KEY' || ETHERSCAN_API_KEY === 'YOUR_ETHERSCAN_API_KEY') {
   console.error('BSCSCAN_API_KEY or ETHERSCAN_API_KEY not set. Please provide valid API keys.');
-  process.exit(1);
-}
-if (!VERCEL_URL.startsWith('https://')) {
-  console.error('Invalid VERCEL_URL: Must start with https://');
   process.exit(1);
 }
 
